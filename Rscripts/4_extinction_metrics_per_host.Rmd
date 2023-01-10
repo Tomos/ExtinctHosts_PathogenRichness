@@ -1,0 +1,1990 @@
+---
+title: "total_aDNA-host-pathogen-workflow"
+author: "Tomos O Prys-Jones"
+date: "18/09/2022"
+output: html_document
+---
+
+```{r, include=FALSE, message=FALSE}
+packages <- c("abind", "adephylo", "ape",
+              "broom",
+              "car", "corrplot", "cowplot",
+              "data.table", "dplyr",
+              "ecodist", "ellipse",
+              "gdalUtilities", "ggmap", "ggplotify", "ggplot2", "ggrepel", "ggspatial", "ggvenn", "ggVennDiagram", "googleway", "GPArotation", "gridExtra",
+              "leaflet",
+              "mapview", "maps", "maptools", "MASS", "Matrix", "MVN",
+              "oceanmap",
+              "paletteer", "phangorn", "phonTools", "phylobase", "profvis", "psych",
+              "viridis",
+              "raster", "readr", "reshape2", "rgdal", "rgeos", "rnaturalearth", "rnaturalearthdata",
+              "scico", "sf", "shiny", "sp", "spData", "stats", "stringi",
+              "tictoc", "tidyverse", "tiff", "tmap"
+)
+base::lapply(packages, library, character.only = TRUE)
+```
+
+
+
+# 1) Load the relevant Phylacine data, including the range maps as matrices/dfs, trait data and the mean phylogenetic tree:
+```{r}
+
+rm(list = ls())
+if(!is.null(dev.list())) dev.off()
+base_dir <- "C:/Users/tomos/OneDrive/PhD/ExtinctHosts_PathogenRichness/"
+
+Phylacine_trait <- read.csv(paste0(base_dir, "PHYLACINE_v1.2.1/Data/Traits/Trait_data.csv"))
+Phylacine_trait <- data.frame(Phylacine_trait)
+
+Extinct_species <- Phylacine_trait %>% filter(IUCN.Status.1.2 == 'EP' | IUCN.Status.1.2 == 'EX' | IUCN.Status.1.2 == 'EW')
+Extinct_species <- Extinct_species %>% filter(Terrestrial == 1 | Aerial == 1)
+
+Extant_species <- Phylacine_trait %>% filter(IUCN.Status.1.2 != 'EP' & IUCN.Status.1.2 != 'EX' & IUCN.Status.1.2 != 'EW')
+#Extant_species$Binomial.1.2[Extant_species$Freshwater == 1 & Extant_species$Terrestrial == 1]
+Extant_species <- Extant_species %>% filter(Terrestrial == 1 | Aerial == 1)
+Extant_species <- Extant_species %>% filter(Marine != 1)
+Extant_species <- Extant_species %>% filter(Binomial.1.2 != 'Homo_sapiens')
+Extant_species$Binomial.1.2 <- stri_replace_all_fixed(Extant_species$Binomial.1.2, 
+                                                      pattern = c(" "), 
+                                                      replacement = c(""), 
+                                                      vectorize_all = FALSE)
+
+no_extinct_sp <- nrow(Extinct_species)
+no_extant_sp <- nrow(Extant_species)
+
+extinct_matrix <- readRDS(paste0(base_dir,'intermediates/extinct_matrix2.rda'))
+extant_matrix <- readRDS(paste0(base_dir,'intermediates/extant_matrix2.rda'))
+
+extant_df <- readRDS(paste0(base_dir, 'intermediates/extant_df.rda'))
+extinct_df <- readRDS(paste0(base_dir, 'intermediates/extinct_df.rda'))
+extant_current_df <- readRDS(paste0(base_dir, "intermediates/extant_current_df.rda"))
+
+distance_matrix <- readRDS(paste0(base_dir,'intermediates/mean_distance_matrix.rda'))
+
+cumulative_matrix_extinct <- rowSums(extinct_matrix, dims = 2)
+cumulative_matrix_extant <- rowSums(extant_matrix, dims = 2)
+saveRDS(cumulative_matrix_extinct, paste0(base_dir,'intermediates/cumulative_matrix_extinct.rda'))  
+saveRDS(cumulative_matrix_extant, paste0(base_dir,'intermediates/cumulative_matrix_extant.rda')) 
+
+cumulative_matrix_extant_current <- readRDS(paste0(base_dir, "intermediates/cumulative_matrix_extant_current"))
+
+```
+
+
+
+# 2) Generate maps of the extinct variables using the Phylacine range maps, trait data and allometric scaling relationships from Wolf et al. (2013):
+```{r pressure, echo=FALSE}
+extinct_mass_matrix <- extinct_matrix
+
+for(i in 1:length(extinct_mass_matrix[1,1,])){
+  extinct_mass_matrix[,,i] <- extinct_mass_matrix[,,i] * Extinct_species$Mass.g[i]
+}
+cumulative_extinct_mass <- rowSums(extinct_mass_matrix, dims = 2)
+mean_extinct_mass <- cumulative_extinct_mass/(length(extinct_mass_matrix[1,1,]))
+
+
+# Home Range matrix; units in Km^2 (equation. taken from Wolf et al (2013))
+extinct_HR_matrix <- 0.0416*(extinct_mass_matrix^1.09)
+cumulative_matrix_HR <- rowSums(extinct_HR_matrix, dims = 2)
+mean_extinct_HR <- cumulative_matrix_HR/(length(extinct_mass_matrix[1,1,]))
+
+# Day range in Km (equation. taken from Wolf et al (2013))
+extinct_DR_matrix <- 0.453*(extinct_mass_matrix^0.368)
+cumulative_matrix_DR <- rowSums(extinct_DR_matrix, dims = 2)
+mean_extinct_DR <- cumulative_matrix_DR/(length(extinct_mass_matrix[1,1,]))
+
+# Passage time in days (equation from Demment (1983) and Demment and Van Soest (1985) via Doughty et al (2020))
+# Digestibility parameter (D) same as used by Doughty et al (2020)
+# Same equation used by Wolf et al (2013)
+# Units: days
+extinct_PT_matrix <- 0.589*0.5*(extinct_mass_matrix^0.26)
+cumulative_PT_matrix <- rowSums(extinct_PT_matrix, dims = 2)
+mean_extinct_PT <- cumulative_PT_matrix/(length(extinct_PT_matrix[1,1,]))
+
+# Fecal diffusivity; units: kgDM.Km^-2 (equation from Wolf et al (2013)):
+extinct_diffusivity_matrix <- 0.05*(extinct_mass_matrix^1.011)
+cumulative_matrix_diff <- rowSums(extinct_diffusivity_matrix, dims = 2)
+mean_extinct_FD <- cumulative_matrix_diff/(length(extinct_mass_matrix[1,1,]))
+
+# Population density (equation from Wolf et al (2013)):
+extinct_density_matrix <- 87.6*((extinct_mass_matrix)^(-0.724))
+cumulative_matrix_abundance <- rowSums(extinct_diffusivity_matrix, dims = 2)
+mean_extinct_abundance <- cumulative_matrix_abundance/(length(extinct_mass_matrix[1,1,]))
+
+
+
+
+# Map of the cumulative extant and extinct species in each pixel:
+melt_cum_extant_sp <- reshape2::melt(cumulative_matrix_extant)
+melt_cum_extant_sp$value[melt_cum_extant_sp$value == 0] <- NA
+
+#legend_title <- expression(atop(textstyle("No of mammal species"),
+#                                atop(textstyle("surviving since 130,000 ybp"),
+#                                     )))
+legend_title <- paste0("Number of extant\nmammal species:")
+
+extant_plot <- ggplot() +
+  geom_raster(data = melt_cum_extant_sp, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, #"No of mammal \nspecies surviving since\n130,000 ybp", 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_cum_extant_sp, na.rm = T), max(melt_cum_extant_sp$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 1.5), text = element_text(size = 15)) #+
+  #scale_fill_viridis(name = "No of mammal\nspecies surviving\nsince 130,000 ybp",limits = c(1,max(melt_cum_extant_sp$value)))
+
+
+#extant_plot <- extant_plot + scico::scale_fill_scico(legend_title, 
+#                                             palette = "hawaii", 
+#                                             na.value = 'white',
+#                                             limits = c(min(melt_cum_extant_sp, na.rm = T),
+#                                                        max(melt_cum_extant_sp$value, na.rm = T))
+#                                             )
+
+plot(extant_plot)
+ggsave(paste0(base_dir,"Figures/Extant_mammals.png"), width = 15, height = 8)
+
+
+
+melt_cum_extinct_sp <- reshape2::melt(cumulative_matrix_extinct)
+melt_cum_extinct_sp$value[melt_cum_extinct_sp$value == 0] <- NA
+#legend_title <- expression(atop(textstyle("No of mammal species"),
+#                                atop(textstyle("lost since 130,000 ybp"),
+#                                     )))
+
+legend_title <- paste0("Number of extinct\nmammal species:")
+
+extinct_plot <- ggplot() +
+  geom_raster(data = melt_cum_extinct_sp, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, #"No of extinct mammal\nspecies lost during\n130,000 ybp", 
+                       colours = topo.colors(no_extinct_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_cum_extinct_sp, na.rm = T), max(melt_cum_extinct_sp$value, na.rm = T)),
+                       #limits = c(min(melt_cum_extinct_sp, na.rm = T), max(melt_cum_extinct_sp$value, na.rm = T)),  #max(melt_cum_extant_sp$value, na.rm = T)), #to have the extinct and extant plots on the same scale
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 1.5), text = element_text(size = 15))  #+
+  #scale_fill_viridis(name = "No of mammal\nspecies lost\nsince 130,000 ybp", limits = c(1,max(melt_cum_extinct_sp$value)))
+
+#extinct_plot <- extinct_plot + scico::scale_fill_scico(palette = "vik")
+
+#extinct_plot <- extinct_plot + scico::scale_fill_scico(legend_title, 
+#                                             palette = "berlin", 
+#                                             na.value = 'white',
+#                                             limits = c(min(melt_cum_extinct_sp, na.rm = T),
+#                                                        max(melt_cum_extinct_sp$value, na.rm = T))
+#                                             )
+
+plot(extinct_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals.png"), width = 15, height = 8)
+
+leg <- cowplot::get_legend(extant_plot)
+leg <- ggplotify::as.ggplot(leg)
+
+extant_plot2 <- extant_plot 
+
+                                             
+extinct_plot2 <- extinct_plot + scale_fill_viridis(legend_title,
+                                                   option = "magma",
+                                                   na.value = "lightgrey")
+
+extinct_plot3 <- extinct_plot + scale_fill_viridis(legend_title,
+                                                  option = "magma",
+                                                  na.value = "lightgrey")
+                                 
+
+
+extant_plot <- extant_plot + theme(legend.position = "none")
+extinct_plot <- extinct_plot + theme(legend.position = "none")
+
+#combined_plot <- arrangeGrob(extant_plot, extinct_plot, nrow=2)
+#combined_plot <- arrangeGrob(combined_plot, leg, nrow=1)
+combined_plot <- plot_grid(plot_grid(extinct_plot2, extant_plot2,
+                                 nrow=2, 
+                                 align="h", 
+                                 rel_widths = c(7,7),
+                                 labels=c("(a)", "(b)"), 
+                                 label_size=15, 
+                                 hjust=0))
+                          
+plot(combined_plot)
+ggsave(file=paste0(base_dir, "Figures/extant_extinct.png"), combined_plot, width = 14, height = 14)
+
+
+
+
+cumulative_matrix_extant_decrease <- readRDS(paste0(base_dir, "intermediates/cumulative_matrix_extant_decrease"))
+melt_diff_extant_decrease <- reshape2::melt(cumulative_matrix_extant_decrease)
+melt_diff_extant_decrease$value[melt_diff_extant_decrease$value == 0] <- NA
+
+#legend_title <- paste0("Per-pixel count of mammals with\nreduced ranges from human acivity")
+legend_title <- paste0("Number of extant mammal\nspecies lost per pixel:")
+extant_decrease_plot <- ggplot() +
+  geom_raster(data = melt_diff_extant_decrease, aes(Var1, 142-Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, #"No of extinct mammal\nspecies lost during\n130,000 ybp", 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_diff_extant_decrease$value, na.rm = TRUE), max(melt_diff_extant_decrease$value-10, na.rm = TRUE)),
+                       #limits = c(min(melt_cum_extinct_sp, na.rm = T), max(melt_cum_extinct_sp$value, na.rm = T)),  #max(melt_cum_extant_sp$value, na.rm = T)), #to have the extinct and extant plots on the same scale
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 1.5), text = element_text(size = 15))  
+
+#plot(extant_decrease_plot)
+legx <- cowplot::get_legend(extant_decrease_plot)
+legx <- ggplotify::as.ggplot(legx)
+extant_decrease_plot <- extant_decrease_plot + theme(legend.position = "none")
+
+legy <- cowplot::get_legend(extinct_plot3)
+legy <- ggplotify::as.ggplot(legy)
+extinct_plot3 <- extinct_plot3 + theme(legend.position = "none")
+
+combined_leg <- plot_grid(legy, legx,
+                           nrow=2,
+                           align="h", 
+                           rel_widths = c(7,7),
+                           labels=c("", ""), 
+                           label_size=15, 
+                           hjust=0)
+
+combined_plot2 <- plot_grid(extinct_plot3, extant_decrease_plot,
+                           nrow=2,
+                           align="h", 
+                           rel_widths = c(7,7),
+                           labels=c("(a)", "(b)"), 
+                           label_size=15, 
+                           hjust=0)
+
+combined_plot2 <- plot_grid(combined_plot2, combined_leg,
+                           nrow = 1,
+                           ncol= 2,
+                           align="h",
+                           rel_widths = c(7,2),
+                           labels=c("", ""), 
+                           label_size=15, 
+                           hjust=0
+                           )
+                          
+#plot(combined_plot2)
+ggsave(file=paste0(base_dir, "Figures/global_local_extinction.png"), combined_plot2, width = 14, height = 14)
+
+
+
+
+melt_cum_extant_curr <- reshape2::melt(cumulative_matrix_extant_current)
+melt_cum_extant_curr$value[melt_cum_extant_curr$value == 0] <- NA
+
+plotting_min <- min(min(melt_cum_extant_curr$value, na.rm = TRUE), min(melt_cum_extant_sp$value, na.rm = TRUE))
+plotting_max <- max(max(melt_cum_extant_curr$value, na.rm = TRUE), max(melt_cum_extant_sp$value, na.rm = TRUE))
+
+extant_plot3 <- ggplot() +
+  geom_raster(data = melt_cum_extant_sp, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, #"No of mammal \nspecies surviving since\n130,000 ybp", 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(plotting_min, plotting_max),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 1.5), text = element_text(size = 15)) #+
+
+extant_plot3 <- extant_plot3 + theme(legend.position = "none")
+
+
+legend_title <- paste0("Number of extant\nmammal species:")
+extant_curr_plot <- ggplot() +
+  geom_raster(data = melt_cum_extant_curr, aes(Var1, 142-Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, #"No of extinct mammal\nspecies lost during\n130,000 ybp", 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(plotting_min, plotting_max),
+                       #limits = c(min(melt_cum_extinct_sp, na.rm = T), max(melt_cum_extinct_sp$value, na.rm = T)),  #max(melt_cum_extant_sp$value, na.rm = T)), #to have the extinct and extant plots on the same scale
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 1.5), text = element_text(size = 15))  
+
+leg1 <- cowplot::get_legend(extant_curr_plot)
+leg1 <- ggplotify::as.ggplot(leg1)
+extant_curr_plot <- extant_curr_plot + theme(legend.position = "none")
+
+
+combined_plot3 <- plot_grid(plot_grid(extant_plot3, extant_curr_plot,
+                              nrow = 2,
+                              ncol= 1,
+                              align="h",
+                              rel_widths = c(7,7),
+                              labels=c("Natural (no anthropogenic influence)", "Current (anthropogenic influence)"), 
+                              label_size=15, 
+                              hjust=0
+                              ),
+                            leg1, 
+                            nrow = 1,
+                            align="h",
+                            rel_widths = c(7,2),
+                            labels=c("", ""), 
+                            label_size=15, 
+                            hjust=0
+                            )
+ggsave(file=paste0(base_dir, "Figures/Extant_natural_current.png"), combined_plot3, width = 14, height = 14)
+
+
+
+
+# Map of the mean mass of extinct mammal species:
+melt_mass_extinct_sp <- reshape2::melt(mean_extinct_mass)
+melt_mass_extinct_sp$value[melt_mass_extinct_sp$value == 0] <- NA
+
+legend_title <- expression(atop(textstyle("Mean mass (g) of mammal"),
+                                atop(textstyle("species lost since 130,000 ybp"),
+                                )))
+
+extinct_mass_plot <- ggplot() + # You can also put the cumulative_extinct_mass here, which gives same figure with different units
+  geom_raster(data = melt_mass_extinct_sp, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, #"Mean mass (g) of \nmammal species lost\nsince 130,000 ybp", 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_mass_extinct_sp$value, na.rm = T), max(melt_mass_extinct_sp$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5), text = element_text(size = 15))
+  #scale_fill_viridis(name = "Mean mass (g) of extinct\nmammal species lost\nsince 130,000 ybp", limits = c(1,max(melt_mass_extinct_sp$)))
+
+plot(extinct_mass_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals_mean_mass.png"), width = 15, height = 8)
+
+
+
+
+
+# Map of the mean home range size for extinct mammals:
+legend_title <- expression(atop(textstyle("Mean home range of mammal "),
+                                atop(textstyle("species lost since 130,000 ybp"),
+                                     atop(textstyle(('Km'^2)),
+                                          ))))
+melt_HR_extinct_sp <- reshape2::melt(mean_extinct_HR)
+melt_HR_extinct_sp$value[melt_HR_extinct_sp$value == 0] <- NA
+extinct_HR_plot <- ggplot() + 
+  geom_raster(data = melt_HR_extinct_sp, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, colours = topo.colors(no_extant_sp, 
+                                                           alpha = 1, 
+                                                           rev = FALSE),
+                       limits = c(min(melt_HR_extinct_sp$value, na.rm = T), max(melt_HR_extinct_sp$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5))
+plot(extinct_HR_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals_mean_HR.png"), width = 15, height = 8)
+
+
+# Map of the mean day ranges of extinct mammals:
+melt_DR_extinct_sp <- reshape2::melt(mean_extinct_DR)
+melt_DR_extinct_sp$value[melt_DR_extinct_sp$value == 0] <- NA
+legend_title <- expression(atop(textstyle("Mean day range of mammal "),
+                                atop(textstyle("species lost since 130,000 ybp"),
+                                     atop(textstyle(('Km'))),
+                                     )))
+
+extinct_DR_plot <- ggplot() + 
+  geom_raster(data = melt_DR_extinct_sp, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_DR_extinct_sp$value, na.rm = T), max(melt_DR_extinct_sp$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5)) +
+  theme(legend.title.align=0)
+plot(extinct_DR_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals_mean_DR.png"), width = 15, height = 8)
+
+
+# Map of mean fecal diffusivity for extinct species:
+melt_FD_extinct_sp <- reshape2::melt(mean_extinct_FD)
+melt_FD_extinct_sp$value[melt_FD_extinct_sp$value == 0] <- NA
+legend_title <- expression(atop(textstyle("Mean fecal diffusivity for mammal"),
+                                atop(textstyle("species lost since 130,000 ybp"),
+                                     atop(textstyle(('Km'^2*"."*'day'^-1))),
+                                     )))
+
+extinct_FD_plot <- ggplot() + 
+  geom_raster(data = melt_FD_extinct_sp, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_FD_extinct_sp$value, na.rm = T), max(melt_FD_extinct_sp$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5)) +
+  theme(legend.title.align=0)
+plot(extinct_FD_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals_mean_FD.png"), width = 15, height = 8)
+
+
+
+# Map of abundance for extinct species:
+legend_title <- expression(atop(textstyle("Mean abundance of mammal"),
+                                atop(textstyle("species lost since 130,000 yb"),
+                                     atop(textstyle(('Km'^-2))),
+                                     )))
+melt_abundance_extinct_sp <- reshape2::melt(mean_extinct_abundance)
+melt_abundance_extinct_sp$value[melt_abundance_extinct_sp$value == 0] <- NA
+extinct_abundance_plot <- ggplot() + 
+  geom_raster(data = melt_abundance_extinct_sp, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_abundance_extinct_sp$value, na.rm = T), max(melt_abundance_extinct_sp$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5)) +
+  theme(legend.title.align=0)
+plot(extinct_abundance_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals_mean_abundance.png"), width = 15, height = 8)
+
+
+
+###########################################################
+### Scale all the above variables by population density ###
+###########################################################
+
+# Home Range matrix scaled by abundance; units: None
+scaled_extinct_HR_matrix <- extinct_HR_matrix * extinct_density_matrix
+scaled_extinct_HR_matrix[scaled_extinct_HR_matrix == 'NaN'] <- 0
+scaled_cumulative_matrix_HR <- rowSums(scaled_extinct_HR_matrix, dims = 2)
+mean_scaled_extinct_HR <- scaled_cumulative_matrix_HR/(length(extinct_HR_matrix[1,1,]))
+
+# Day range scaled by abundance; units: Km^-1: 
+scaled_extinct_DR_matrix <- extinct_DR_matrix * extinct_density_matrix
+scaled_extinct_DR_matrix[scaled_extinct_DR_matrix == 'NaN'] <- 0
+scaled_cumulative_matrix_DR <- rowSums(scaled_extinct_DR_matrix, dims = 2)
+mean_scaled_extinct_DR <- scaled_cumulative_matrix_DR/(length(extinct_DR_matrix[1,1,]))
+
+# Passage time scaled by abundance; units: days.km^-2
+scaled_extinct_PT_matrix <- extinct_PT_matrix * extinct_density_matrix
+scaled_extinct_PT_matrix[scaled_extinct_PT_matrix == "NaN"] <- 0
+scaled_cumulative_matrix_PT <- rowSums(scaled_extinct_PT_matrix, dims = 2)
+mean_scaled_extinct_PT <- scaled_cumulative_matrix_PT/(length(extinct_PT_matrix[1,1,]))
+
+# Fecal diffusivity; scaled by abundance; units: kgDM.Km^-4
+scaled_extinct_diffusivity_matrix <- extinct_diffusivity_matrix * extinct_density_matrix
+scaled_extinct_diffusivity_matrix[scaled_extinct_diffusivity_matrix == 'NaN'] <- 0
+scaled_cumulative_matrix_diff <- rowSums(scaled_extinct_diffusivity_matrix, dims = 2)
+mean_scaled_extinct_diff <- scaled_cumulative_matrix_diff/(length(extinct_diffusivity_matrix[1,1,]))
+
+# Terrestrial mammal biomass (multiply the extinction_density_matrix by the mass of each lost species):
+extinct_biomass_matrix <- extinct_density_matrix
+for(i in 1:length(extinct_biomass_matrix[1,1,])){
+  extinct_biomass_matrix[,,i] <- extinct_density_matrix[,,i] * Extinct_species$Mass.g[i]
+}
+extinct_biomass_matrix[extinct_biomass_matrix == 'Inf'] <- 0
+cumulative_extinct_biomass <- rowSums(extinct_biomass_matrix, dims = 2)
+mean_extinct_biomass <- cumulative_extinct_biomass/(length(extinct_biomass_matrix[1,1,]))
+
+# Map of the mean home range size for extinct mammals scaled by abundance:
+legend_title <- expression(atop(textstyle("Mean home range of mammal "),
+                                atop(textstyle("species lost since 130,000 yb"),
+                                     atop(textstyle("scaled by species abundance"),
+                                          atop(textstyle("(no units)"))),
+                                     )))
+melt_mean_scaled_HR_extinct <- reshape2::melt(mean_scaled_extinct_HR)
+melt_mean_scaled_HR_extinct$value[melt_mean_scaled_HR_extinct$value == 0] <- NA
+scaled_extinct_HR_plot <- ggplot() + 
+  geom_raster(data = melt_mean_scaled_HR_extinct, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_mean_scaled_HR_extinct$value, na.rm = T), 
+                                  max(melt_mean_scaled_HR_extinct$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5))
+plot(scaled_extinct_HR_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals_mean_HR_abundance_scaled.png"), width = 15, height = 8)
+
+
+
+# Map of the mean day range size for extinct mammals scaled by abundance:
+legend_title <- expression(atop(textstyle("Mean day range of mammal"),
+                                atop(textstyle("species lost since 130,000 yb"),
+                                     atop(textstyle("scaled by species abundance"),
+                                          atop(textstyle(('Km'^-1)))),
+                                     )))
+
+melt_mean_scaled_DR_extinct <- reshape2::melt(mean_scaled_extinct_DR)
+melt_mean_scaled_DR_extinct$value[melt_mean_scaled_DR_extinct$value == 0] <- NA
+
+scaled_extinct_DR_plot <- ggplot() + 
+  geom_raster(data = melt_mean_scaled_DR_extinct, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_mean_scaled_DR_extinct$value, na.rm = T), 
+                                  max(melt_mean_scaled_DR_extinct$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5))
+plot(scaled_extinct_DR_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals_mean_DR_abundance_scaled.png"), width = 15, height = 8)
+
+
+
+
+# Map of the mean fecal diffusivity for extinct mammals scaled by abundance:
+legend_title <- expression(atop(textstyle("Mean fecal diffusivity of mammal"),
+                                atop(textstyle("species lost since 130,000 yb"),
+                                     atop(textstyle("scaled by species abundance"),
+                                          atop(textstyle(('kgDM'*"."*'Km'^-4)))),
+                                     )))
+
+melt_mean_scaled_FD_extinct <- reshape2::melt(mean_scaled_extinct_diff)
+melt_mean_scaled_FD_extinct$value[melt_mean_scaled_FD_extinct$value == 0] <- NA
+
+scaled_extinct_FD_plot <- ggplot() + 
+  geom_raster(data = melt_mean_scaled_FD_extinct, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_mean_scaled_FD_extinct$value, na.rm = T), 
+                                  max(melt_mean_scaled_FD_extinct$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5))
+plot(scaled_extinct_FD_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals_mean_FD_abundance_scaled.png"), width = 15, height = 8)
+
+
+
+# Map of the mean terrestrial biomass for extinct species: 
+legend_title <- expression(atop(textstyle("Terrestical mammal biomass for"),
+                                atop(textstyle("species lost since 130,000 yb"),
+                                     atop(textstyle(('g'*"."*'Km'^-2))),
+                                     )))
+
+melt_mean_biomass_extinct <- reshape2::melt(mean_extinct_biomass)
+melt_mean_biomass_extinct$value[melt_mean_biomass_extinct$value == 0] <- NA
+
+scaled_extinct_biomass_plot <- ggplot() + 
+  geom_raster(data = melt_mean_biomass_extinct, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, colours = topo.colors(no_extant_sp, 
+                                                           alpha = 1, 
+                                                           rev = FALSE),
+                       limits = c(min(melt_mean_biomass_extinct$value, na.rm = T), 
+                                  max(melt_mean_biomass_extinct$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5)) +
+  theme(legend.title.align=0)
+plot(scaled_extinct_biomass_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals_mean_biomass.png"), width = 15, height = 8)
+
+
+# Map of the mean passage time for extinct mammals scaled by abundance: 
+legend_title <- expression(atop(textstyle("Mean passage time of mammal"),
+                                atop(textstyle("species lost since 130,000 yb"),
+                                     atop(textstyle("scaled by species abundance"),
+                                          atop(textstyle(('days'*"."*'Km'^-2)))),
+                                     )))
+
+melt_mean_PT_extinct <- reshape2::melt(mean_scaled_extinct_PT)
+melt_mean_PT_extinct$value[melt_mean_PT_extinct$value == 0] <- NA
+
+scaled_extinct_PT_plot <- ggplot() + 
+  geom_raster(data = melt_mean_PT_extinct, aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn(legend_title, 
+                       colours = topo.colors(no_extant_sp, 
+                                             alpha = 1, 
+                                             rev = FALSE),
+                       limits = c(min(melt_mean_PT_extinct$value, na.rm = T), 
+                                  max(melt_mean_PT_extinct$value, na.rm = T)),
+                       na.value="lightgrey") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5)) +
+  theme(legend.title.align=0)
+
+plot(scaled_extinct_PT_plot)
+ggsave(paste0(base_dir,"Figures/Extinct_mammals_mean_PT.png"), width = 15, height = 8)
+
+```
+
+
+
+
+# 3) Generate df of extinction variables for all Phylacine extant species, inc. the number of once sympatric extinct hosts, their minimum, mean and median phylogenetic distance, as well as the number of extinct sympatric species that were in the same order, family and genus as the extant hosts:
+```{r}
+species_table <- data.frame(Extant_species[,1]) 
+total_phylo_dist <- rep(NA,no_extant_sp)
+sympatric_extinct_no <- rep(NA, no_extant_sp)
+average_phylo_dist <- rep(NA,no_extant_sp)
+min_phylo_dist <- rep(NA,no_extant_sp)
+median_phylo_dist <- rep(NA, no_extant_sp)
+mean_HR <- rep(NA, no_extant_sp)
+median_HR <- rep(NA, no_extant_sp)
+mean_FD <- rep(NA, no_extant_sp)
+median_FD <- rep(NA, no_extant_sp)
+mean_DR <- rep(NA, no_extant_sp)
+median_DR <- rep(NA, no_extant_sp)
+mean_PT <- rep(NA, no_extant_sp)
+median_PT <- rep(NA, no_extant_sp)
+mean_biomass <- rep(NA, no_extant_sp)
+median_biomass <- rep(NA, no_extant_sp)
+no_overlapping_order <- rep(NA, no_extant_sp)
+no_overlapping_family <- rep(NA, no_extant_sp)
+no_overlapping_genera <- rep(NA, no_extant_sp)
+
+species_table <- cbind(species_table, 
+                       sympatric_extinct_no, 
+                       total_phylo_dist, 
+                       average_phylo_dist, 
+                       min_phylo_dist, 
+                       median_phylo_dist, 
+                       mean_HR,
+                       median_HR,
+                       mean_FD,
+                       median_FD,
+                       mean_DR,
+                       median_DR,
+                       mean_PT,
+                       median_PT,
+                       mean_biomass,
+                       median_biomass,
+                       no_overlapping_order,
+                       no_overlapping_family,
+                       no_overlapping_genera)
+
+pb = txtProgressBar(min = 0, max = no_extant_sp, initial = 0, style = 3) 
+
+for(jj in 1:no_extant_sp){ # no_extant_sp
+  #tic()
+  #jj <- 3
+  focal_genera <- Extant_species$Genus.1.2[jj]
+  focal_family <- Extant_species$Family.1.2[jj]
+  focal_order <-  Extant_species$Order.1.2[jj]
+  #print(paste0("Extant species: ", Extant_species[jj,1], " number: ", jj, " of: ", no_extant_sp))
+  setTxtProgressBar(pb,jj)
+  
+  overlap_array <- array() #rep(0, no_extinct_sp)
+  overlap_size_array <- array() # Measures the amount of overlap between the extant and extinct species.
+  counter = 1
+  test_species <- extant_matrix[,,jj]
+  #image(test_species)
+  
+  presence_cood <- which(test_species != 0, arr.ind = T)
+  no_coord <- length(presence_cood[,1])
+  #print(presence_cood)
+  #print(no_coord)
+  
+  if(no_coord > 0){
+    #for(i in 1:no_coord){
+    for(ii in 1:no_extinct_sp){
+      area_counter <- 0
+      
+      for(i in 1:no_coord){
+      
+        row <- presence_cood[i,1]
+        column <- presence_cood[i,2]
+      
+    
+        if(extinct_matrix[row, column, ii] == 1){
+          area_counter <- area_counter + 1
+        }else{
+          area_counter <- area_counter
+        }
+      
+        if(extinct_matrix[row, column, ii] == 1 && is.element(ii, overlap_array) == FALSE){
+
+          overlap_array <- cbind(overlap_array, ii)
+          
+          
+        }else{
+        
+          overlap_array <- overlap_array
+          
+        }
+
+      }
+      
+      overlap_size_array <- cbind(overlap_size_array, area_counter)
+    
+    }
+    
+  }
+  
+  overlap_size_array <- overlap_size_array[overlap_size_array > 0]
+  overlap_size_array <- overlap_size_array[!is.na(overlap_size_array)]
+  
+  overlap_array <- overlap_array[!is.na(overlap_array)]
+  overlap_len <- length(overlap_array)
+  
+  
+  # Based on the sympatric extinct species, calculate their estimated masses (g)
+  mass_array <- Phylacine_trait$Mass.g[overlap_array]
+  # Population density; units: #.km^-2
+  Density_array <- 87.6*(mass_array^(-0.724))
+  Density_array[Density_array == 'Inf'] <- 0
+  Density_array[Density_array == 'NaN'] <- 0
+  # Based on the masses, calculate the Home Range in Km^2 (equation. taken from Doughty et al (2020))
+  HR_array <- 0.0416*(mass_array^1.09)
+  HR_array <- HR_array * Density_array ### Comment out to remove the effect of mammal abundance
+  # and Day range in Km (equation also taken from Doughty et al (2020))
+  DR_array <- 0.453*(mass_array^0.368)
+  DR_array <- DR_array * Density_array ### Comment out to remove the effect of mammal abundance
+  # and Passage time in days (equation from Demment (1983) and Demment and Van Soest (1985) via Doughty et al (2020))
+  # Digestibility parameter (D) same as used by Doughty et al (2020); Units: days
+  # NEEDS TO BE IMPORVED BASED ON ROO'S RESULTS
+  PT_array <- 0.589*0.5*(mass_array^0.25)
+  PT_array <- PT_array * Density_array ### Comment out to remove the effect of mammal abundance
+  # Fecal diffusivity array; units: kgDm.km^-2
+  FD_array <- 0.05*(mass_array^1.011)
+  FD_array <- FD_array * Density_array ### Comment out to remove the effect of mammal abundance
+  # Lost terrestrial mammalian biomass; KgDM.km-2 
+  Biomass_array <- Density_array*mass_array
+  
+  # Based on the symmetric extinct species, create list of their orders, families and genera:
+  order_array <- Phylacine_trait$Order.1.2[overlap_array]
+  family_array <- Phylacine_trait$Family.1.2[overlap_array]
+  genus_array <- Phylacine_trait$Genus.1.2[overlap_array]
+  
+  # Make sure the metrics are zero:
+  genetic_dist <- rep(NA, no_extinct_sp)
+  total_relatedness <- NA
+  total_relatedness <- as.numeric(total_relatedness)
+  average_relatedness <- NA
+  minimum_relatedness <- NA
+  mean_HR <- NA
+  median_HR <- NA
+  mean_FD <- NA
+  median_FD <- NA
+  mean_DR <- NA
+  median_DR <- NA
+  mean_PT <- NA
+  median_PT <- NA
+  mean_biomass <- NA
+  median_biomass <- NA
+  overlapping_order <- NA
+  overlapping_family <- NA
+  overlapping_genera <- NA
+  sp1 <- Extant_species[jj,1]
+  genetic_counter <- 1
+  #print(overlap_len)
+  #print(overlap_array)
+  if(overlap_len > 0){
+
+    for(overlap_counter in 1:overlap_len){
+      #overlap_counter <- 1
+      sp2 <- Extinct_species[overlap_array[overlap_counter],1]
+      genetic_dist[genetic_counter] <- distance_matrix[sp1,sp2]
+      #print(genetic_dist[counter])
+      genetic_counter = genetic_counter + 1
+    }
+    
+    #print(overlap_array)
+    #print(genetic_dist)
+
+    genetic_counter = genetic_counter - 1
+    genetic_dist_subset <- genetic_dist[1:genetic_counter]
+    #print(genetic_dist_subset)
+    
+    total_phylo_dist <- sum(genetic_dist_subset)
+    #print(total_phylo_dist)
+    
+    average_phylo_dist <- NA
+    average_phylo_dist<- mean(genetic_dist_subset)
+    #print(average_phylo_dist)
+    
+    minimum_phylo_dist <- NA
+    minimum_phylo_dist <- min(genetic_dist_subset)
+    #print(minimum_phylo_dist)
+    
+    median_phylo_dist <- NA
+    median_phylo_dist <- median(genetic_dist_subset)
+    
+    mean_HR <- NA
+    mean_HR <- mean(HR_array) # equal weight given to each extinct species that overlaps with the focal extant species
+    #mean_HR <- weighted.mean(HR_array, overlap_size_array) # weighted by the amount they overlap with the focal extant species
+    
+    median_HR <- NA
+    median_HR <- median(HR_array)
+    
+    mean_FD <- NA
+    mean_FD <- mean(FD_array) # equal weight given to each extinct species that overlaps with the focal extant species
+    #mean_FD <- weighted.mean(FD_array, overlap_size_array) # weighted by the amount they overlap with the focal extant species
+    
+    median_FD <- NA
+    median_FD <- median(FD_array)
+    
+    mean_DR <- NA
+    mean_DR <- mean(DR_array) # equal weight given to each extinct species that overlaps with the focal extant species
+    #mean_DR <- weighted.mean(DR_array, overlap_size_array) #weighted by the amount they overlap with the focal extant species
+    
+    median_DR <- NA
+    median_DR <- median(DR_array)
+    
+    mean_PT <- NA
+    mean_PT <- mean(PT_array) # equal weight given to each extinct species that overlaps with the focal extant species
+    #mean_PT <- weighted.mean(PT_array, overlap_size_array) #weighted by the amount they overlap with the focal extant species
+    
+    median_PT <- NA
+    median_PT <- median(PT_array)
+    
+    mean_biomass <- NA
+    mean_biomass <- mean(Biomass_array) # equal weight given to each extinct species that overlaps with the focal extant species
+    #mean_biomass <- weighted.mean(Biomass_array, overlap_size_array) #weighted by the amount they overlap with the focal extant species 
+    
+    median_biomass <- NA
+    median_biomass <- median(Biomass_array)
+    
+    overlapping_order <- 0
+    # COUNT THE NUMBER OF OCCURENCES OF THE EXTANT SPECIES ORDER IN THE ORDER_ARRAY 
+    xx <- match(order_array, focal_order)
+    #print("ORDER:")
+    #print(focal_order)
+    #print(order_array)
+    xx <- xx[!is.na(xx)]
+    overlapping_order <- sum(xx)
+    #print(overlapping_order)
+    
+    overlapping_family <- 0
+    # COUNT THE NUMBER OF OCCURENCES OF THE EXTANT SPECIES FAMILY IN THE FAMILY_ARRAY 
+    xx <- match(family_array, focal_family)
+    #print("FAMILY:")
+    #print(focal_family)
+    #print(family_array)
+    xx <- xx[!is.na(xx)]
+    overlapping_family <- sum(xx)
+    #print(overlapping_family)
+    
+    
+    overlapping_genera <- 0
+    # COUNT THE NUMBER OF OCCURENCES OF THE EXTANT SPECIES GENUS IN THE GENUS_ARRAY 
+    xx <- match(genus_array, focal_genera)
+    #print("GENUS:")
+    #print(focal_genera)
+    #print(genus_array)
+    xx <- xx[!is.na(xx)]
+    overlapping_genera <- sum(xx)
+    #print(overlapping_genera)
+    
+    species_table$sympatric_extinct_no[jj] <- genetic_counter
+    species_table$total_phylo_dist[jj] <- total_phylo_dist
+    species_table$average_phylo_dist[jj] <- average_phylo_dist
+    species_table$min_phylo_dist[jj] <- minimum_phylo_dist
+    species_table$median_phylo_dist[jj] <- median_phylo_dist
+    species_table$mean_HR[jj] <- mean_HR 
+    species_table$median_HR[jj] <- median_HR
+    species_table$mean_FD[jj] <- mean_FD
+    species_table$median_FD[jj] <- median_FD
+    species_table$mean_DR[jj] <- mean_DR
+    species_table$median_DR[jj] <- median_DR
+    species_table$mean_PT[jj] <- mean_PT
+    species_table$median_PT[jj] <- median_PT
+    species_table$mean_biomass[jj] <- mean_biomass
+    species_table$median_biomass[jj] <- median_biomass
+    species_table$no_overlapping_order[jj] <- overlapping_order
+    species_table$no_overlapping_family[jj] <- overlapping_family
+    species_table$no_overlapping_genera[jj] <- overlapping_genera
+    
+  }else{
+    # Enter an NA for phylogenetic distances for the species that don't have a range
+    species_table$sympatric_extinct_no[jj] = 'NA'
+    species_table$total_phylo_dist[jj] = 'NA'
+    species_table$average_phylo_dist[jj] = 'NA'
+    species_table$min_phylo_dist[jj] = 'NA'
+    species_table$median_phylo_dist[jj] = 'NA'
+    species_table$mean_HR[jj] = 'NA' 
+    species_table$median_HR[jj] = 'NA'
+    species_table$mean_FD[jj] = 'NA'
+    species_table$median_FD[jj] = 'NA'
+    species_table$mean_DR[jj] = 'NA'
+    species_table$median_DR[jj] = 'NA'
+    species_table$mean_PT[jj] = 'NA'
+    species_table$median_PT[jj] = 'NA'
+    species_table$mean_biomass[jj] = 'NA'
+    species_table$median_biomass[jj] = 'NA'
+    species_table$no_overlapping_order[jj] = 'NA'
+    species_table$no_overlapping_family[jj] = 'NA'
+    species_table$no_overlapping_genera[jj] = 'NA'
+  }
+  
+  #toc()
+  
+}
+
+species_table <- data.frame(species_table)
+write.csv(species_table, paste0(base_dir,"intermediates/Extinct_sympatric_metrics.csv"), row.names = F)
+
+```
+
+
+
+# 4) Create maps of the mean and minimum phylogenetic distances between extant and extinct species using the metrics calculated in the previous code block. E.g., the minimum phylo distances between extant and extinct species were calculated across the extant species' range map, then these min phylo range maps were averaged into a single map. This was repeated for mean phylo distances:
+```{r}
+species_table <- read.csv(paste0(base_dir,"intermediates/Extinct_sympatric_metrics.csv"))
+
+###########################################################
+# Mean phylogenetic distance between extant & LP species ##
+###########################################################
+mean_phylo_matrix <- extant_matrix
+species_table <- as.data.frame(species_table)
+x <- !is.na(species_table$sympatric_extinct_no)
+species_table2 <- species_table[x,]
+mean_phylo_matrix <- mean_phylo_matrix[,,x]
+cumulative_matrix_extant2 <- rowSums(mean_phylo_matrix, dims = 2)
+no_extant_species2 <- length(species_table2[,1])
+
+
+for(i in 1:no_extant_species2){
+  #i <- 1
+  print(paste0("Extant taxon: ", i, " of: ", no_extant_species2))
+  average_phylo_dist <- as.numeric(species_table2$median_phylo_dist[i])
+  #print(average_phylo_dist)
+  mean_phylo_matrix[,,i] <- mean_phylo_matrix[,,i] * average_phylo_dist
+}
+  
+  
+total_mean_phylo <- rowSums(mean_phylo_matrix, dims = 2)
+total_mean_phylo[total_mean_phylo == 0] <- NA
+mean_mean_phylo <- total_mean_phylo / cumulative_matrix_extant2
+mean_mean_phylo[mean_mean_phylo == 0] <- NA
+
+saveRDS(mean_mean_phylo, paste0(base_dir, 'intermediates/mean_phylo_dist.rda'))
+
+
+###########################################################
+## Min phylogenetic distance between extant & LP species ##
+###########################################################
+min_phylo_matrix <- extant_matrix
+min_phylo_matrix <- min_phylo_matrix[,,x]
+cumulative_matrix_extant2 <- rowSums(min_phylo_matrix, dims = 2)
+
+for(i in 1:no_extant_species2){
+  #i <- 1
+  print(paste0("Extant taxon: ", i, " of: ", no_extant_species2))
+  min_phylo_dist <- as.numeric(species_table2$min_phylo_dist[i])
+  #print(min_phylo_dist)
+  min_phylo_matrix[,,i] <- min_phylo_matrix[,,i] * as.numeric(min_phylo_dist)
+}
+
+total_min_phylo <- rowSums(min_phylo_matrix, dims = 2)
+total_min_phylo[total_min_phylo == 0] <- NA
+mean_min_phylo <- total_min_phylo / cumulative_matrix_extant2
+mean_min_phylo[mean_min_phylo == 0] <- NA
+
+saveRDS(mean_min_phylo, paste0(base_dir,'intermediates/min_phylo_dist.rda'))
+
+###########################################################
+###### Plotting mean and min phylogenetic distances #######
+###########################################################
+mean_mean_phylo <- readRDS(paste0(base_dir,'intermediates/mean_phylo_dist.rda'))
+melt_mean_mean_phylo <- reshape2::melt(mean_mean_phylo)
+melt_mean_mean_phylo$value[melt_mean_mean_phylo$value == 0] <- NA
+melt_mean_mean_phylo$value <- (melt_mean_mean_phylo$value)
+
+mean_phylo_plot <- ggplot(melt_mean_mean_phylo) +
+  geom_raster(aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn("Phylogenetic distance\n (millions of years)", colours = topo.colors(50, alpha = 1, rev = TRUE), na.value = 'black') +
+  #ggtitle("Mean phylogenetic distance between extant mammals\n and extinct sympatric species per pixel") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5))
+
+mean_phylo_plot <- mean_phylo_plot + scico::scale_fill_scico("Phylogenetic distance\n (millions of years)", 
+                                                             palette = "oleron", 
+                                                             na.value = 'white')
+plot(mean_phylo_plot)
+ggsave(paste0(base_dir,"Figures/Mean_phylogenetic_map.png"), width = 15, height = 8)
+
+
+
+
+
+
+mean_min_phylo <- readRDS(paste0(base_dir,'intermediates/min_phylo_dist.rda'))
+melt_mean_min_phylo <- reshape2::melt(mean_min_phylo)
+melt_mean_min_phylo$value[melt_mean_min_phylo$value == 0] <- NA
+
+min_phylo_plot <- ggplot(reshape2::melt(mean_min_phylo)) +
+  geom_raster(aes(Var1, Var2, fill = value)) +
+  scale_fill_gradientn("Phylogenetic distance\n (millions of years)", 
+                       colours = topo.colors(50, 
+                                             alpha = 1, 
+                                             rev = TRUE), 
+                       na.value = 'black') +
+  #ggtitle("Minimum phylogenetic distance between extant mammals\n and extinct sympatric species per pixel") +
+  xlab("Longditude (resolution 96.5 km)") +
+  ylab("Latitude (resolution 96.5 km)") +
+  theme(panel.background = element_blank()) +
+  theme(axis.text.x = element_blank(), axis.text.y = element_blank(), plot.title = element_text(hjust = 0.5))
+
+min_phylo_plot <- min_phylo_plot + scico::scale_fill_scico("Phylogenetic distance\n (millions of years)", 
+                                                           palette = "oleron", 
+                                                           na.value = 'white') 
+
+
+
+plot(min_phylo_plot)
+ggsave(paste0(base_dir,"Figures/Min_phylogenetic_map.png"), width = 15, height = 8)
+
+
+leg1 <- cowplot::get_legend(mean_phylo_plot)
+#leg1 <- ggplotify::as.ggplot(leg1)
+min_phylo_plot <- min_phylo_plot + theme(legend.position = "none")
+mean_phylo_plot <- mean_phylo_plot + theme(legend.position = "none") 
+
+
+
+combined_plot_ee <- plot_grid(extinct_plot, extant_plot, 
+                                 nrow=1, 
+                                 align="h", 
+                                 rel_heights = c(5,5),
+                                 labels=c("(a)", "(b)"), 
+                                 label_size=10, 
+                                 hjust=0)
+combined_plot_pp <- plot_grid(min_phylo_plot, mean_phylo_plot, 
+                                 nrow=1, 
+                                 align="h", 
+                                 rel_heights = c(5,5),
+                                 labels=c("(c)", "(d)"), 
+                                 label_size=10, 
+                                 hjust=0)
+combined_plot <- plot_grid(combined_plot_ee, combined_plot_pp,
+                           nrow = 2,
+                           align="h", 
+                                 rel_widths = c(3,3),
+                                 labels=c("", ""), 
+                                 label_size=10, 
+                                 hjust=0)
+
+
+combined_plot_leg <- plot_grid(leg, leg1, 
+                                 nrow=2, 
+                                 align="h", 
+                                 rel_widths = c(7,7),
+                                 labels=c("", ""), 
+                                 label_size=10, 
+                                 hjust=0)
+  
+combined_plot <- plot_grid(combined_plot, combined_plot_leg,
+                           nrow = 1,
+                           align = "h",
+                           rel_widths = c(18, 3),
+                           labels = c("", ""),
+                           label_size = 10,
+                           hjust = 0)
+plot(combined_plot)
+ggsave(file=paste0(base_dir, "Figures/extant_extinct_phylo.png"), combined_plot, width = 14, height = 8)
+
+
+```
+# Check the overlap between the host-pathogen relationships in the Shaw et al. (2020) and CLOVER dataset:
+
+```{r}
+#farrell.df <- as.data.frame(read.csv(paste0(base_dir, "Farrell_et_al_2021/data/hp_list_full.csv")))
+
+#shaw_hp <- as.data.frame(read.csv(paste0(base_dir, "Shaw_et_al_2020/data/PathogenVsHostDB-2019-05-30.csv")))
+#shaw_hp <- shaw_hp %>%
+#  filter(HostSpecies != "Homo sapiens") %>%
+#  filter(Domestic == "No") %>%
+#  group_by(Type, HostSpecies, Species) %>%
+#  summarize(n = n())
+#shaw_hp$HostSpecies <- tolower(gsub(" ", "_", shaw_hp$HostSpecies))
+#shaw_hp$Species <- tolower(gsub(" ", "_", shaw_hp$Species))
+#shaw_hp$host_pathogen <- paste0(shaw_hp$HostSpecies, "//", shaw_hp$Species)
+#shaw_virus <- shaw_hp %>%
+#  filter(Type == "Virus")
+#shaw_bacteria <- shaw_hp %>%
+#  filter(Type == "Bacteria")
+
+clover_pathogen_dir <- paste0(base_dir, "clover/clover_1.0_allpathogens/")
+clover_virus <- read.csv(file = paste0(clover_pathogen_dir, "CLOVER_1.0_Viruses_AssociationsFlatFile.csv"))
+clover_bacteria <- read.csv(file = paste0(clover_pathogen_dir, "CLOVER_1.0_Bacteria_AssociationsFlatFile.csv"))
+clover_HPF <- read.csv(file = paste0(clover_pathogen_dir, "CLOVER_1.0_HelminthProtozoaFungi_AssociationsFlatFile.csv"))
+
+clover_virus <- clover_virus %>%
+  filter(clover_virus$Host != "homo sapiens") %>%
+  group_by(Host, Pathogen, Database) %>%
+  summarize(n = n())
+clover_virus <- as.data.frame(clover_virus)
+clover_virus$host_pathogen <- paste0(clover_virus$Host, "//", clover_virus$Pathogen)
+clover_virus_eid2 <- clover_virus %>% filter(clover_virus$Database == "EID2")
+clover_virus_shaw <- clover_virus %>% filter(clover_virus$Database == "Shaw")
+clover_virus_hp3 <- clover_virus %>% filter(clover_virus$Database == "HP3")
+clover_virus_gmpd2 <- clover_virus %>% filter(clover_virus$Database == "GMPD2")
+clover_virus_eid2_v <- unlist(clover_virus_eid2$host_pathogen)
+clover_virus_shaw_v <- unlist(clover_virus_shaw$host_pathogen)
+clover_virus_gmpd2_v <- unlist(clover_virus_gmpd2$host_pathogen)
+clover_virus_hp3_v <- unlist(clover_virus_hp3$host_pathogen)
+x <- list(clover_virus_shaw_v, clover_virus_eid2_v, clover_virus_hp3_v, clover_virus_gmpd2_v)
+eid2_vs_shaw_virus_plot <- ggVennDiagram(x,
+              category.names = c("Shaw\net al.\n(2020)",
+                                 "EID2",
+                                 "HP3",
+                                 "GMPD2"),
+              edge_size = 1,
+              edge_lty = "blank",
+              set_size = 3
+              ) + 
+  theme(legend.position = "bottom") +
+  scale_fill_gradient("Count:", low = "#F4FAFE", high = "#4981BF")
+plot(eid2_vs_shaw_virus_plot)
+ggsave(file=paste0(base_dir, "Figures/CLOVER_virus_shawVSeid2.png"), eid2_vs_shaw_virus_plot, bg = "white", width = 10, height = 5, units = "in")
+
+
+clover_bacteria <- clover_bacteria %>%
+  filter(clover_bacteria$Host != "homo sapiens") %>%
+  group_by(Host, Pathogen, Database) %>%
+  summarize(n = n())
+clover_bacteria <- as.data.frame(clover_bacteria)
+clover_bacteria$host_pathogen <- paste0(clover_bacteria$Host, "//", clover_bacteria$Pathogen)
+clover_bacteria_eid2 <- clover_bacteria %>% filter(clover_bacteria$Database == "EID2")
+clover_bacteria_shaw <- clover_bacteria %>% filter(clover_bacteria$Database == "Shaw")
+clover_bacteria_gmpd2 <- clover_bacteria %>% filter(clover_bacteria$Database == "GMPD2")
+clover_bacteria_eid2_v <- unlist(clover_bacteria_eid2$host_pathogen)
+clover_bacteria_shaw_v <- unlist(clover_bacteria_shaw$host_pathogen)
+clover_bacteria_gmpd2_v <- unlist(clover_bacteria_gmpd2$host_pathogen)
+eid2_vs_shaw_bacteria_plot <- 
+  ggVennDiagram(list(clover_bacteria_shaw_v, clover_bacteria_eid2_v, clover_bacteria_gmpd2_v),
+              category.names = c("Shaw\net al.\n(2020)",
+                                 "EID2",
+                                 "GMPD2"),
+              edge_size = 1,
+              edge_lty = "blank",
+              set_size = 3
+              ) + 
+  theme(legend.position = "bottom") +
+  scale_fill_gradient("Count:", low = "#F4FAFE", high = "#4981BF")
+  #scale_fill_distiller(palette = "Reds", direction = 1)
+plot(eid2_vs_shaw_bacteria_plot)
+ggsave(file=paste0(base_dir, "Figures/CLOVER_bacteria_shawVSeid2.png"), eid2_vs_shaw_bacteria_plot, bg = "white", width = 10, height = 5, units = "in")
+
+
+clover_helminth <- clover_HPF %>%
+  filter(clover_HPF$PathogenType == "helminth")
+
+clover_helminth <- clover_helminth %>%
+  filter(clover_helminth$Host != "homo sapiens") %>%
+  group_by(Host, Pathogen, Database) %>%
+  summarize(n = n())
+
+clover_helminth <- as.data.frame(clover_helminth)
+clover_helminth$host_pathogen <- paste0(clover_helminth$Host, "//", clover_helminth$Pathogen)
+unique(clover_helminth$Database)
+clover_helminth_eid2 <- clover_helminth %>% filter(clover_helminth$Database == "EID2")
+clover_helminth_gmpd2 <- clover_helminth %>% filter(clover_helminth$Database == "GMPD2")
+clover_helminth_eid2_v <- unlist(clover_helminth_eid2$host_pathogen)
+clover_helminth_gmpd2_v <- unlist(clover_helminth_gmpd2$host_pathogen)
+x <- list(clover_helminth_eid2_v, clover_helminth_gmpd2_v)
+eid2_vs_gmpd2_helminth_plot <- ggVennDiagram(x,
+              category.names = c("EID2",
+                                 "GMPD2"),
+              edge_size = 1,
+              edge_lty = "blank",
+              set_size = 3
+              ) + 
+  theme(legend.position = "bottom") +
+  scale_fill_gradient("Count:", low = "#F4FAFE", high = "#4981BF")
+plot(eid2_vs_gmpd2_helminth_plot)
+ggsave(file=paste0(base_dir, "Figures/CLOVER_helminth_gmpd2VSeid2.png"), eid2_vs_gmpd2_helminth_plot, bg = "white", width = 10, height = 5, units = "in")
+
+
+
+```
+
+
+
+
+
+
+# 5) Takes each of the Albery et al. (2022)/Olival et al. (2017) hosts and for each one, adds the number of viruses, bacteria and helminths from the CLOVER dataset. It also adds the number of arthropods as measured by Farrell et al. (2021), as well as the number of viruses and bacteria from Shaw et al. (2020):
+```{r}
+
+olival.db <- readRDS(paste0(base_dir, "Shaw_et_al_2020/data/Olival-et-al-database.rds"))
+olival.df <- as.data.frame(olival.db$hosts)
+species_table <- read.csv(paste0(base_dir,"intermediates/Extinct_sympatric_metrics.csv"))
+
+
+# FARRELL et al. (2021) host-pathogen list as well as the arthropod and protozoa associations.
+farrell.df <- as.data.frame(read.csv(paste0(base_dir, "Farrell_et_al_2021/data/hp_list_full.csv")))
+farrell_breakdown <- farrell.df %>%
+  group_by(farrell.df$ParType) %>%
+  summarize(n = n())
+farrell.arthropod <- farrell.df %>%
+  filter(farrell.df$ParType == "Arthropod") 
+unique(farrell.arthropod$database)
+
+
+farrell.arthropod <- farrell.arthropod %>%
+  group_by(host) %>%
+  summarise(n = n())
+farrell.arthropod <- as.data.frame(farrell.arthropod)
+
+
+clover_pathogen_dir <- paste0(base_dir, "clover/clover_1.0_allpathogens/")
+albery_hosts_dir <- paste0(base_dir, "Albery_et_al_2022_UrbanOutputters-main/UrbanOutputters-main/Data/")
+eskew_dir <- paste0(base_dir, "Albery_et_al_2022_UrbanOutputters-main/UrbanOutputters-main/EskewFiles/")
+list.files(path = clover_pathogen_dir, pattern="csv$")
+
+# Hosts come from ALBERY et al. (2022):
+albery_hosts <- read.csv(file = paste0(albery_hosts_dir, "hosts.csv"))
+albery_hosts$Host <- tolower(paste0(albery_hosts$hGenus, " ", albery_hosts$hSpecies))
+albery_hosts <- as.data.frame(albery_hosts)
+
+### Checking how the host data from Olival et al (2017) compares to Albery et al (2022):
+matching_names <- albery_hosts$hHostNameFinal[which(as.character(albery_hosts$hHostNameFinal) %in% as.character(olival.df$hHostNameFinal))]
+matching_names <- as.data.frame(matching_names)
+
+in_A_not_in_O_names <- albery_hosts$hHostNameFinal[which(!(as.character(albery_hosts$hHostNameFinal) %in% as.character(olival.df$hHostNameFinal)))]
+in_A_not_in_O_names <- as.data.frame(in_A_not_in_O_names)
+
+in_O_not_in_A_names <- olival.df$hHostNameFinal[which(!(as.character(olival.df$hHostNameFinal) %in% as.character(albery_hosts$hHostNameFinal)))]
+in_O_not_in_A_names <- as.data.frame(in_O_not_in_A_names)
+
+### Loading CLOVER pathogen data:
+clover_bacteria <- read.csv(file = paste0(clover_pathogen_dir, "CLOVER_1.0_Bacteria_AssociationsFlatFile.csv"))
+clover_virus <- read.csv(file = paste0(clover_pathogen_dir, "CLOVER_1.0_Viruses_AssociationsFlatFile.csv"))
+clover_HPF <- read.csv(file = paste0(clover_pathogen_dir, "CLOVER_1.0_HelminthProtozoaFungi_AssociationsFlatFile.csv"))
+
+all_clover <- rbind(clover_bacteria, clover_virus, clover_HPF)
+print(paste0("Unique hosts-pathogen associations in the CLOVER repository: ", nrow(unique(all_clover[,c('Pathogen','Host')]))))
+print(paste0("Unique hosts in the CLOVER repository: ", length(unique(all_clover$Host))))
+print(paste0("Unique pathogens in the CLOVER repository: ", length(unique(all_clover$Pathogen))))
+print(paste0("Different types of pathogen: ", toString(unique(all_clover$PathogenType))))
+
+# Splitting the CLOVER Helminth data into the two constituent datasets:
+clover_helminth2 <- clover_HPF %>%
+  filter(clover_HPF$PathogenType == "helminth")
+clover_helminth2 <- clover_helminth2 %>%
+  filter(clover_helminth2$Host != "homo sapiens") %>%
+  group_by(Host, Pathogen, Database) %>%
+  summarize(n = n())
+clover_helminth2 <- as.data.frame(clover_helminth2)
+clover_helminth_eid2 <- clover_helminth2 %>% filter(clover_helminth2$Database == "EID2")
+clover_helminth_eid2 <- clover_helminth_eid2 %>% distinct(Host, Pathogen, .keep_all = TRUE)
+clover_helminth_eid2 <- clover_helminth_eid2 %>%
+  group_by(Host) %>%
+  summarize(n = n())
+
+clover_helminth_gmpd2 <- clover_helminth2 %>% filter(clover_helminth2$Database == "GMPD2")
+clover_helminth_gmpd2 <- clover_helminth_gmpd2 %>% distinct(Host, Pathogen, .keep_all = TRUE)
+clover_helminth_gmpd2 <- clover_helminth_gmpd2 %>%
+  group_by(Host) %>%
+  summarize(n = n())
+
+
+### There is repetition between the different datasets, so need to deduplicate repeated host-pathogen relationships:
+clover_bacteria <- clover_bacteria %>% distinct(Host,Pathogen, .keep_all = TRUE)
+clover_virus <- clover_virus %>% distinct(Host,Pathogen, .keep_all = TRUE)
+clover_HPF <- clover_HPF %>% distinct(Host,Pathogen, .keep_all = TRUE)
+
+
+### Count the pathogens per host 
+clover_bacteria_perhost <- clover_bacteria %>%
+  group_by(Host, PathogenType) %>%
+  summarise(n_bact = n())
+
+clover_virus_perhost <- clover_virus %>%
+  group_by(Host, PathogenType) %>%
+  summarise(n_virus = n())
+
+clover_HPF_perhost <- clover_HPF %>%
+  group_by(Host, PathogenType) %>%
+  summarise(n_HPF = n())
+clover_helminth_perhost <- clover_HPF %>%
+  group_by(Host, PathogenType) %>%
+  filter(PathogenType == "helminth") %>%
+  summarise(n_helminth = n())
+clover_protozoa_perhost <- clover_HPF_perhost %>%
+  group_by(Host, PathogenType) %>%
+  filter(PathogenType == "protozoa") %>%
+  summarise(n_protozoa = n())
+clover_fungi_perhost <- clover_HPF_perhost %>%
+  group_by(Host, PathogenType) %>%
+  filter(PathogenType == "fungi") %>%
+  summarise(n_fungi = n())
+
+print(paste0("Number of unique viruses: ", length(unique(clover_virus$Pathogen))))
+
+
+albery_hosts$n_bact <- NA
+albery_hosts$n_virus <- NA
+albery_hosts$n_helminth <- NA
+albery_hosts$n_protozoa <- NA
+albery_hosts$n_fungi <- NA
+albery_hosts$n_arthropods <- NA
+
+
+albery_hosts$n_bact[which(albery_hosts$Host %in% clover_bacteria_perhost$Host)] <- 
+  clover_bacteria_perhost$n_bact[which(clover_bacteria_perhost$Host %in% albery_hosts$Host)]
+
+albery_hosts$n_virus[which(albery_hosts$Host %in% clover_virus_perhost$Host)] <- 
+  clover_virus_perhost$n_virus[which(clover_virus_perhost$Host %in% albery_hosts$Host)]
+
+albery_hosts$n_helminth[which(albery_hosts$Host %in% clover_helminth_perhost$Host)] <- 
+  clover_helminth_perhost$n_helminth[which(clover_helminth_perhost$Host %in% albery_hosts$Host)]
+
+albery_hosts$n_protozoa[which(albery_hosts$Host %in% clover_protozoa_perhost$Host)] <- 
+  clover_protozoa_perhost$n_protozoa[which(clover_protozoa_perhost$Host %in% albery_hosts$Host)]
+
+albery_hosts$n_fungi[which(albery_hosts$Host %in% clover_fungi_perhost$Host)] <- 
+  clover_fungi_perhost$n_fungi[which(clover_fungi_perhost$Host %in% albery_hosts$Host)]
+
+albery_hosts$n_arthropods[which(albery_hosts$hHostNameFinal %in% farrell.arthropod$host)] <-
+  farrell.arthropod$n[which(farrell.arthropod$host %in% albery_hosts$hHostNameFinal)]
+
+### Rename the pathogen columns to have a _CLOVER suffix:
+names(albery_hosts)[names(albery_hosts) == "n_bact"] <- "n_bact_CLOVER"
+names(albery_hosts)[names(albery_hosts) == "n_virus"] <- "n_virus_CLOVER"
+names(albery_hosts)[names(albery_hosts) == "n_helminth"] <- "n_helminth_CLOVER"
+names(albery_hosts)[names(albery_hosts) == "n_protozoa"] <- "n_protozoa_CLOVER"
+names(albery_hosts)[names(albery_hosts) == "n_fungi"] <- "n_fungi_CLOVER"
+names(albery_hosts)[names(albery_hosts) == "n_arthropods"] <- "n_arthropods_Farrell"
+########
+
+### Adding PC1 and PC2 from Plourde et al. (2017) to Albery hosts:
+plourde_PCA <- read.csv(file = paste0(eskew_dir, "reservoir_data_for_greg.csv"))
+plourde_PCA$host <- paste0(plourde_PCA$Genus, "_", plourde_PCA$Species)
+
+albery_hosts$Plourde_PC1 <- NA
+albery_hosts$Plourde_PC2 <- NA
+
+albery_hosts$Plourde_PC1[which(albery_hosts$hHostNameFinal %in% plourde_PCA$host)] <-
+  plourde_PCA$PC1[which(plourde_PCA$host %in% albery_hosts$hHostNameFinal)]
+
+albery_hosts$Plourde_PC2[which(albery_hosts$hHostNameFinal %in% plourde_PCA$host)] <-
+  plourde_PCA$PC2[which(plourde_PCA$host %in% albery_hosts$hHostNameFinal)]
+
+### Adding the adjusted masses from Olival et al (2017):
+albery_hosts$hMassGramsPVR <- NA
+albery_hosts$hMassGramsPVR[which(tolower(sub("_", " ", olival.df$hHostNameFinal)) %in% albery_hosts$Host)] <-
+  olival.df$hMassGramsPVR[which(albery_hosts$Host %in% tolower(sub("_", " ", olival.df$hHostNameFinal)))]
+
+
+shaw_hp <- as.data.frame(read.csv(paste0(base_dir, "Shaw_et_al_2020/data/PathogenVsHostDB-2019-05-30.csv")))
+shaw_hp_RNA <- shaw_hp
+shaw_hp_DNA <- shaw_hp
+
+shaw_hp_zoo <- shaw_hp %>%
+  filter(Zoonotic == "Yes")
+shaw_hp_zoo <- shaw_hp_zoo %>%
+  filter(HostSpecies != "Homo sapiens") %>%
+  filter(Domestic == "No") %>%
+  group_by(Type, HostSpecies) %>%
+  summarize(n = n())
+shaw_hp_zoo$HostSpecies <- sub(" ", "_", shaw_hp_zoo$HostSpecies)
+
+shaw_hp <- shaw_hp %>%
+  filter(HostSpecies != "Homo sapiens") %>%
+  filter(Domestic == "No") %>%
+  group_by(Type, HostSpecies) %>%
+  summarize(n = n())
+shaw_hp$HostSpecies <- sub(" ", "_", shaw_hp$HostSpecies)
+
+shaw_virus <- shaw_hp %>%
+  filter(Type == "Virus")
+shaw_bacteria <- shaw_hp %>%
+  filter(Type == "Bacteria")
+shaw_virus_zoo <- shaw_hp_zoo %>%
+  filter(Type == "Virus")
+shaw_bacteria_zoo <- shaw_hp_zoo %>%
+  filter(Type == "Bacteria")
+
+shaw_hp_RNA <- shaw_hp_RNA[which(grepl("RNA", shaw_hp_RNA$Genome) == TRUE), ]
+shaw_hp_RNA <- shaw_hp_RNA %>%
+  filter(HostSpecies != "Homo sapiens") %>%
+  filter(Domestic == "No") %>%
+  group_by(Type, HostSpecies) %>%
+  summarize(n = n())
+shaw_hp_RNA$HostSpecies <- sub(" ", "_", shaw_hp_RNA$HostSpecies)
+
+shaw_virus_RNA <- shaw_hp_RNA %>%
+  filter(Type == "Virus")
+
+shaw_hp_DNA <- shaw_hp_DNA[which(grepl("DNA", shaw_hp_DNA$Genome) == TRUE), ]
+shaw_hp_DNA <- shaw_hp_DNA %>%
+  filter(HostSpecies != "Homo sapiens") %>%
+  filter(Domestic == "No") %>%
+  group_by(Type, HostSpecies) %>%
+  summarize(n = n())
+shaw_hp_DNA$HostSpecies <- sub(" ", "_", shaw_hp_DNA$HostSpecies)
+
+shaw_virus_DNA <- shaw_hp_DNA %>%
+  filter(Type == "Virus")
+  
+albery_hosts$n_virus_Shaw <- NA
+albery_hosts$n_bact_Shaw <- NA
+
+albery_hosts$n_virus_Shaw[which(albery_hosts$hHostNameFinal %in% shaw_virus$HostSpecies)] <- shaw_virus$n[which(shaw_virus$HostSpecies %in% albery_hosts$hHostNameFinal)]
+albery_hosts$n_bact_Shaw[which(albery_hosts$hHostNameFinal %in% shaw_bacteria$HostSpecies)] <- shaw_bacteria$n[which(shaw_bacteria$HostSpecies %in% albery_hosts$hHostNameFinal)]
+
+
+write.csv(albery_hosts, paste0(base_dir, "intermediates/albery_hosts_CLOVER_Farrell_Plourde.csv"), row.names = F)
+
+
+
+
+### Add the CLOVER and Plourde data to Olival et al. (2017)
+
+# OLIVAL et al. (2017) hosts:
+olival.df$n_bact_CLOVER <- NA
+olival.df$n_virus_CLOVER <- NA
+olival.df$n_helminth_CLOVER <- NA
+olival.df$n_helminth_EID2 <- NA
+olival.df$n_helminth_GMPD2 <- NA
+olival.df$n_protozoa_CLOVER <- NA
+olival.df$n_fungi_CLOVER <- NA
+olival.df$n_arthropods_Farrell <- NA
+olival.df$Plourde_PC1 <- NA
+olival.df$Plourde_PC2 <- NA
+
+olival.df$n_bact_CLOVER[which(tolower(sub("_", " ", olival.df$hHostNameFinal)) %in% clover_bacteria_perhost$Host)] <- 
+  clover_bacteria_perhost$n_bact[which(clover_bacteria_perhost$Host %in% tolower(sub("_", " ", olival.df$hHostNameFinal)))]
+
+olival.df$n_virus_CLOVER[which(tolower(sub("_", " ", olival.df$hHostNameFinal)) %in% clover_virus_perhost$Host)] <- 
+  clover_virus_perhost$n_virus[which(clover_virus_perhost$Host %in% tolower(sub("_", " ", olival.df$hHostNameFinal)))]
+
+olival.df$n_helminth_CLOVER[which(tolower(sub("_", " ", olival.df$hHostNameFinal)) %in% clover_helminth_perhost$Host)] <- 
+  clover_helminth_perhost$n_helminth[which(clover_helminth_perhost$Host %in% tolower(sub("_", " ", olival.df$hHostNameFinal)))]
+
+olival.df$n_helminth_EID2[which(tolower(sub("_", " ", olival.df$hHostNameFinal)) %in% clover_helminth_eid2$Host)] <- 
+  clover_helminth_eid2$n[which(clover_helminth_eid2$Host %in% tolower(sub("_", " ", olival.df$hHostNameFinal)))]
+
+olival.df$n_helminth_GMPD2[which(tolower(sub("_", " ", olival.df$hHostNameFinal)) %in% clover_helminth_gmpd2$Host)] <- 
+  clover_helminth_gmpd2$n[which(clover_helminth_gmpd2$Host %in% tolower(sub("_", " ", olival.df$hHostNameFinal)))]
+
+olival.df$n_fungi_CLOVER[which(tolower(sub("_", " ", olival.df$hHostNameFinal)) %in% clover_fungi_perhost$Host)] <- 
+  clover_fungi_perhost$n_fungi[which(clover_fungi_perhost$Host %in% tolower(sub("_", " ", olival.df$hHostNameFinal)))]
+
+olival.df$n_protozoa_CLOVER[which(tolower(sub("_", " ", olival.df$hHostNameFinal)) %in% clover_protozoa_perhost$Host)] <- 
+  clover_protozoa_perhost$n_protozoa[which(clover_protozoa_perhost$Host %in% tolower(sub("_", " ", olival.df$hHostNameFinal)))]
+   
+olival.df$n_arthropods_Farrell[which(as.character(olival.df$hHostNameFinal) %in% farrell.arthropod$host)] <-
+  farrell.arthropod$n[which(farrell.arthropod$host %in% as.character(olival.df$hHostNameFinal))]
+
+olival.df$Plourde_PC1[which(as.character(olival.df$hHostNameFinal) %in% plourde_PCA$host)] <-
+  plourde_PCA$PC1[which(plourde_PCA$host %in% as.character(olival.df$hHostNameFinal))]
+
+olival.df$Plourde_PC2[which(as.character(olival.df$hHostNameFinal) %in% plourde_PCA$host)] <-
+  plourde_PCA$PC2[which(plourde_PCA$host %in% as.character(olival.df$hHostNameFinal))]
+
+olival.df$n_virus_Shaw <- NA
+olival.df$n_bact_Shaw <- NA
+olival.df$n_virus_Shaw_zoo <- NA
+olival.df$n_bact_Shaw_zoo <- NA
+olival.df$n_virus_Shaw_RNA <- NA
+olival.df$n_virus_Shaw_DNA <- NA
+
+olival.df$n_virus_Shaw[which(olival.df$hHostNameFinal %in% shaw_virus$HostSpecies)] <- shaw_virus$n[which(shaw_virus$HostSpecies %in% olival.df$hHostNameFinal)]
+olival.df$n_bact_Shaw[which(olival.df$hHostNameFinal %in% shaw_bacteria$HostSpecies)] <- shaw_bacteria$n[which(shaw_bacteria$HostSpecies %in% olival.df$hHostNameFinal)]
+
+olival.df$n_virus_Shaw_zoo[which(olival.df$hHostNameFinal %in% shaw_virus_zoo$HostSpecies)] <- shaw_virus_zoo$n[which(shaw_virus_zoo$HostSpecies %in% olival.df$hHostNameFinal)]
+olival.df$n_bact_Shaw_zoo[which(olival.df$hHostNameFinal %in% shaw_bacteria_zoo$HostSpecies)] <- shaw_bacteria_zoo$n[which(shaw_bacteria_zoo$HostSpecies %in% olival.df$hHostNameFinal)]
+
+olival.df$n_virus_Shaw_RNA[which(olival.df$hHostNameFinal %in% shaw_virus_RNA$HostSpecies)] <- shaw_virus_RNA$n[which(shaw_virus_RNA$HostSpecies %in% olival.df$hHostNameFinal)]
+
+olival.df$n_virus_Shaw_DNA[which(olival.df$hHostNameFinal %in% shaw_virus_DNA$HostSpecies)] <- shaw_virus_DNA$n[which(shaw_virus_DNA$HostSpecies %in% olival.df$hHostNameFinal)]
+
+olival.df$prop_veg[which(olival.df$hHostNameFinal %in% Extant_species$Binomial.1.2)] <- Extant_species$Diet.Plant[which(Extant_species$Binomial.1.2 %in% olival.df$hHostNameFinal)]
+olival.df$prop_invert[which(olival.df$hHostNameFinal %in% Extant_species$Binomial.1.2)] <- Extant_species$Diet.Invertebrate[which(Extant_species$Binomial.1.2 %in% olival.df$hHostNameFinal)]
+olival.df$prop_vert[which(olival.df$hHostNameFinal %in% Extant_species$Binomial.1.2)] <- Extant_species$Diet.Vertebrate[which(Extant_species$Binomial.1.2 %in% olival.df$hHostNameFinal)]
+
+write.csv(olival.df, paste0(base_dir, "intermediates/olival_hosts_CLOVER_Farrell_Plourde.csv"), row.names = F)
+
+```
+
+#Data for stats on host-pathogen respositories:
+```{r}
+
+#SHaw et al. (2020) and GMPD2:
+
+shaw_hp2 <- as.data.frame(read.csv(paste0(base_dir, "Shaw_et_al_2020/data/PathogenVsHostDB-2019-05-30.csv")))
+shaw_hp2$Species <- gsub(" ", "_", shaw_hp2$Species)
+shaw_hp2$HostSpecies <- gsub(" ", "_", shaw_hp2$HostSpecies)
+shaw_hp2 <- shaw_hp2 %>% 
+  filter(HostSpecies != "Homo_sapiens") %>%
+  filter(Domestic == "No") %>%
+  group_by(Type, HostSpecies, Species) %>%
+  summarize(n = n())
+
+shaw_hostvirus <- shaw_hp2[shaw_hp2$Type == "Virus",] 
+shaw_hostbacteria <- shaw_hp2[shaw_hp2$Type == "Bacteria",] 
+
+saveRDS(shaw_hostvirus, paste0(base_dir, "intermediates/shaw_hostvirus"))
+saveRDS(shaw_hostbacteria, paste0(base_dir, "intermediates/shaw_hostbacteria"))
+
+clover_helminth3 <- clover_HPF %>%
+  filter(clover_HPF$PathogenType == "helminth")
+clover_helminth3 <- clover_helminth3 %>%
+  filter(clover_helminth3$Host != "homo sapiens") %>%
+  group_by(Host, Pathogen, Database) %>%
+  summarize(n = n())
+
+gmpd2_helminth <- clover_helminth3[clover_helminth3$Database == "GMPD2",]
+gmpd2_helminth <- gmpd2_helminth %>% distinct(Host, Pathogen, .keep_all = TRUE)
+saveRDS(gmpd2_helminth, paste0(base_dir, "intermediates/gmpd2_hosthelminth"))
+
+# CLOVER:
+saveRDS(clover_virus, paste0(base_dir, "intermediates/clover_hostvirus"))
+saveRDS(clover_bacteria, paste0(base_dir, "intermediates/clover_hostbacteria"))
+clover_helminth4 <- clover_helminth3 %>% distinct(Host,Pathogen, .keep_all = TRUE)
+saveRDS(clover_helminth4, paste0(base_dir, "intermediates/clover_hosthelminth"))
+
+
+```
+
+
+
+# Checking:
+# a) whether the Shaw et al (2020) data correlates closely with the same data in CLOVER
+```{r}
+shaw_hp <- as.data.frame(read.csv(paste0(base_dir, "Shaw_et_al_2020/data/PathogenVsHostDB-2019-05-30.csv")))
+shaw_hp <- shaw_hp %>%
+  group_by(Type, HostSpecies) %>%
+  summarize(n = n())
+shaw_hp$HostSpecies <- tolower(shaw_hp$HostSpecies)
+shaw_virus <- shaw_hp %>%
+  filter(Type == "Virus")
+shaw_bacteria <- shaw_hp %>%
+  filter(Type == "Bacteria")
+
+shaw_virus$clover_match <- NA
+shaw_bacteria$clover_match <- NA
+
+clover_pathogen_dir <- paste0(base_dir, "clover/clover_1.0_allpathogens/")
+clover_virus <- read.csv(file = paste0(clover_pathogen_dir, "CLOVER_1.0_Viruses_AssociationsFlatFile.csv"))
+clover_bacteria <- read.csv(file = paste0(clover_pathogen_dir, "CLOVER_1.0_Bacteria_AssociationsFlatFile.csv"))
+clover_virus <- clover_virus %>%
+  group_by(Host, Pathogen, Database) %>%
+  summarize(n = n())
+clover_virus <- as.data.frame(clover_virus)
+clover_virus_shaw <- clover_virus %>% filter(clover_virus$Database == "Shaw")
+clover_virus_shaw <- clover_virus_shaw %>%
+  group_by(Host) %>%
+  summarize(n = n())
+
+clover_bacteria <- clover_bacteria %>%
+  group_by(Host, Pathogen, Database) %>%
+  summarize(n = n())
+clover_bacteria <- as.data.frame(clover_bacteria)
+clover_bacteria_shaw <- clover_bacteria %>% filter(clover_bacteria$Database == "Shaw")
+clover_bacteria_shaw <- clover_bacteria_shaw %>%
+  group_by(Host) %>%
+  summarize(n = n())
+
+shaw_virus$clover_match[which(shaw_virus$HostSpecies %in% clover_virus_shaw$Host)] <- clover_virus_shaw$n[which(clover_virus_shaw$Host %in% shaw_virus$HostSpecies)]
+shaw_virus$diff <- shaw_virus$n - shaw_virus$clover_match
+clover_shaw_vir_diff <- shaw_virus %>% filter(shaw_virus$diff> 0)
+
+shaw_bacteria$clover_match[which(shaw_bacteria$HostSpecies %in% clover_bacteria_shaw$Host)] <- clover_bacteria_shaw$n[which(clover_bacteria_shaw$Host %in% shaw_bacteria$HostSpecies)]
+shaw_bacteria$diff <- shaw_bacteria$n - shaw_bacteria$clover_match
+clover_shaw_bac_diff <- shaw_bacteria %>% filter(shaw_bacteria$diff> 0)
+
+ggplot(data = shaw_virus, aes(x = shaw_virus$n, y = shaw_virus$clover_match))+
+  geom_point(color = 'green') + 
+  theme_classic() + 
+  xlab("Shaw virus richness per host\nfrom Shaw et al. (2020)") +
+  ylab("Shaw virus rhichness per host\nfrom CLOVER") +
+  geom_abline(slope = 1)
+
+ggplot(data = shaw_bacteria, aes(x = shaw_bacteria$n, y = shaw_bacteria$clover_match))+
+  geom_point(color = 'green') + 
+  theme_classic() + 
+  xlab("Shaw bacteria richness per host\nfrom Shaw et al. (2020)") +
+  ylab("Shaw bacteria rhichness per host\nfrom CLOVER") +
+  geom_abline(slope = 1)
+```
+
+
+
+
+# 6) Takes the host data frame and changes the names of certain taxa to match the Phylacine classification, as these differs  from the IUCN classification in certain cases:
+```{r}
+host_trait_db <- read.csv(paste0(base_dir, "intermediates/olival_hosts_CLOVER_Farrell_Plourde.csv"))
+#host_trait_db <- read.csv(paste0(base_dir, "albery_hosts_CLOVER_Farrell_Plourde.csv"))
+host_trait_df <- as.data.frame(host_trait_db)
+host_trait_df <- host_trait_df[host_trait_df$hWildDomFAO == "wild",]
+host_trait_df <- host_trait_df[host_trait_df$hMarOTerr == "Terrestrial",]
+host_trait_df$hHostNameFinal <- as.character(host_trait_df$hHostNameFinal)
+host_trait_df$hHostNameFinal <- stri_replace_all_fixed(host_trait_df$hHostNameFinal, 
+                                                      pattern = c(" "), 
+                                                      replacement = c(""), 
+                                                      vectorize_all = FALSE)
+host_trait_df$hHostNameFinal_Phylacine <- host_trait_df$hHostNameFinal
+rownames(host_trait_df) <- 1:nrow(host_trait_df)
+no_host_sp <- length(host_trait_df[,1])
+
+print(paste0("the number of Olival/Albery mammal species is: ", no_host_sp))
+valid_syn_counter <- 0
+invalid_syn_counter <- 0
+unidentified_synonymn_counter_1 <- 0
+unidentified_synonymn_counter_2 <- 0
+
+no_valid_synonym_list <- data.frame(from = character(), host_trait_table_row_n = numeric(), to = character(), phylacine_invalid_synonym_row_n = numeric(), present_in_invalid_syn_table = character())
+name_changes <- data.frame(from = character(), host_trait_table_row_n = numeric(), to = character(), phylacine_valid_synonym_row_n = numeric(), validity = character())
+
+
+
+Phylacine_syn_valid_sp <- read.csv(paste0(base_dir, "PHYLACINE_v1.2.1/Data/Taxonomy/Synonymy_table_valid_species_only.csv"))
+Phylacine_syn_valid_sp_edited <- Phylacine_syn_valid_sp[,4:13]
+Phylacine_syn_valid_sp_edited[Phylacine_syn_valid_sp_edited == '000 Species not accepted'] <- NA
+Phylacine_syn_valid_sp_edited$alt_binom_1.0 <- paste0(Phylacine_syn_valid_sp_edited$Genus.1.0, "_", Phylacine_syn_valid_sp_edited$Species.1.0)
+Phylacine_syn_valid_sp_edited$alt_binom_1.1 <- paste0(Phylacine_syn_valid_sp_edited$Genus.1.1, "_", Phylacine_syn_valid_sp_edited$Species.1.1)
+Phylacine_syn_valid_sp_edited$alt_binom_1.2 <- paste0(Phylacine_syn_valid_sp_edited$Genus.1.2, "_", Phylacine_syn_valid_sp_edited$Species.1.2)
+Phylacine_syn_valid_sp_edited$Elton <- paste0(Phylacine_syn_valid_sp_edited$EltonTraits.1.0.Genus, "_", Phylacine_syn_valid_sp_edited$EltonTraits.1.0.Species)
+Phylacine_syn_valid_sp_edited$IUCN <- paste0(Phylacine_syn_valid_sp_edited$IUCN.2016.3.Genus, "_", Phylacine_syn_valid_sp_edited$IUCN.2016.3.Species)
+Phylacine_syn_valid_sp_edited[Phylacine_syn_valid_sp_edited == "NA_NA"] <- NA
+#Phylacine_syn_valid_sp_edited <- Phylacine_syn_valid_sp_edited[11:ncol(Phylacine_syn_valid_sp_edited)]
+
+Phylacine_syn_unacc_sp <- read.csv(paste0(base_dir,"PHYLACINE_v1.2.1/Data/Taxonomy/Synonymy_table_with_unaccepted_species.csv"))
+Phylacine_syn_unacc_sp_edited <- Phylacine_syn_unacc_sp[,4:13]
+Phylacine_syn_unacc_sp_edited[Phylacine_syn_unacc_sp_edited == '000 Species not accepted'] <- NA
+Phylacine_syn_unacc_sp_edited$alt_binom_1.0 <- paste0(Phylacine_syn_unacc_sp_edited$Genus.1.0, "_", Phylacine_syn_unacc_sp_edited$Species.1.0)
+Phylacine_syn_unacc_sp_edited$alt_binom_1.1 <- paste0(Phylacine_syn_unacc_sp_edited$Genus.1.1, "_", Phylacine_syn_unacc_sp_edited$Species.1.1)
+Phylacine_syn_unacc_sp_edited$alt_binom_1.2 <- paste0(Phylacine_syn_unacc_sp_edited$Genus.1.2, "_", Phylacine_syn_unacc_sp_edited$Species.1.2)
+Phylacine_syn_unacc_sp_edited$Elton <- paste0(Phylacine_syn_unacc_sp_edited$EltonTraits.1.0.Genus, "_", Phylacine_syn_unacc_sp_edited$EltonTraits.1.0.Species)
+Phylacine_syn_unacc_sp_edited$IUCN <- paste0(Phylacine_syn_unacc_sp_edited$IUCN.2016.3.Genus, "_", Phylacine_syn_unacc_sp_edited$IUCN.2016.3.Species)
+Phylacine_syn_unacc_sp_edited[Phylacine_syn_unacc_sp_edited == "NA_NA"] <- NA
+#Phylacine_syn_unacc_sp_edited <- Phylacine_syn_unacc_sp_edited[11:ncol(Phylacine_syn_unacc_sp_edited)]
+
+
+### CHECKS THE Olival/Albery ET AL SPECIES NAMES AGAINST THE PHYLACLINE SPECIES NAMES;
+### CHANGES ALL THE Olival/Albery ET AL SPECIES TO THE PHYLACLINE SPECIES NAMES IF THEY DIFFER:
+ 
+for(i in 1:no_host_sp){ #no_host_sp
+  #i <- 91
+  #print(i)
+  test.query <- host_trait_df$hHostNameFinal[i]
+  test.query <- as.character(test.query)
+  #print(paste0(">    ", i, ": species: ", test.query))
+  coord = which(as.character(Extant_species$Binomial.1.2) == test.query, arr.ind = TRUE)
+  
+  # If coord has a length of 0, test.query (Olival/Albery species) is not present in the Phylacine species: 
+  if(length(coord) == 0){
+    #print(paste0(i, ": ", test.query))
+    syn_coords = which(Phylacine_syn_valid_sp_edited == test.query, arr.ind = TRUE)
+    syn_coords <- as.data.frame(syn_coords)
+    syn_row <- unique(syn_coords$row)
+    if(length(syn_row) > 1){
+      print(paste0("More than one row in valid table"))
+      print(syn_coords)
+      return("---")
+    }else{}
+
+    if(length(syn_row) > 0){
+      if(test.query != Phylacine_syn_valid_sp$Binomial.1.2[syn_row]){
+        # Change the name of the Olival/Albery species (test.query)
+        print(paste0("Olival/Albery et al species: ", test.query, " changed to ", Phylacine_syn_valid_sp$Binomial.1.2[syn_row], " using the Phylacline VALID synonymy table"))
+        valid_syn_entry <- cbind(as.character(test.query), i, as.character(Phylacine_syn_valid_sp$Binomial.1.2[syn_row]), syn_row, "valid")
+        colnames(valid_syn_entry) <- c("v1", "v2", "v3", "v4", "v5")
+        name_changes <- rbind(name_changes, valid_syn_entry)
+        host_trait_df$hHostNameFinal_Phylacine[i] <- as.character(Phylacine_syn_valid_sp$Binomial.1.2[syn_row])
+        test.query <- as.character(Phylacine_syn_valid_sp$Binomial.1.2[syn_row])
+        valid_syn_counter <- valid_syn_counter + 1
+      }else{}
+    }else{}
+  }else{}
+  
+  coord = which(as.character(Extant_species$Binomial.1.2) == test.query, arr.ind = TRUE)
+  if(length(coord) == 0){
+    unacc_syn_coords = which(Phylacine_syn_unacc_sp_edited == test.query, arr.ind = TRUE)
+    unacc_syn_coords <- as.data.frame(unacc_syn_coords)
+    unacc_syn_row <- unique(unacc_syn_coords$row)
+    #print("///")
+    if(length(unacc_syn_row) > 1){
+      #print(paste0("More than one row in syn_unacc table: "))
+      #print(unacc_syn_row)
+      
+    }else{}
+    
+    if(length(unacc_syn_row) > 0){
+      
+      #for(tt in 1:length(unacc_syn_row)){
+      #  focal_row <- unacc_syn_row[tt]
+        #print(focal_row)
+        
+        if(test.query != Phylacine_syn_unacc_sp$Binomial.1.2[unacc_syn_row] && as.character(Phylacine_syn_unacc_sp$Binomial.1.2[unacc_syn_row]) != "000 Species not accepted"){
+          
+          print(paste0("Olival/Albery species name: ", test.query, " changed to: ", Phylacine_syn_unacc_sp$Binomial.1.2[unacc_syn_row], " using the Phylacline INVALID synonymy table"))
+          host_trait_df$hHostNameFinal_Phylacine[i] <- as.character(Phylacine_syn_unacc_sp$Binomial.1.2[unacc_syn_row])
+          invalid_syn_entry <- cbind(test.query, i, as.character(Phylacine_syn_unacc_sp$Binomial.1.2[unacc_syn_row]), unacc_syn_row, "invalid")
+          colnames(invalid_syn_entry) <- c("v1", "v2", "v3", "v4", "v5")
+          name_changes <- rbind(name_changes, invalid_syn_entry)
+          invalid_syn_counter <- invalid_syn_counter + 1
+          
+        }else if(test.query == Phylacine_syn_unacc_sp$Binomial.1.2[unacc_syn_row] && as.character(Phylacine_syn_unacc_sp$Binomial.1.2[unacc_syn_row]) == "000 Species not accepted"){
+          
+          print(paste0(test.query, " PRESENT in invalid synonym table, but no valid alternative"))
+          invalid_entry1 <- cbind(test.query, i, Phylacine_syn_unacc_sp$Binomial.1.2[unacc_syn_row], unacc_syn_row, "B")
+          colnames(invalid_entry1) <- c("v1", "v2", "v3", "v4", "v5")
+          no_valid_synonym_list <- rbind(no_valid_synonym_list, invalid_entry1)
+          unidentified_synonymn_counter_1 <- unidentified_synonymn_counter_1 + 1
+          
+        }else{
+          print(Phylacine_syn_unacc_sp$Binomial.1.2[unacc_syn_row])
+          invalid_entry2 <- cbind(test.query, i, Phylacine_syn_unacc_sp$Binomial.1.2[unacc_syn_row], unacc_syn_row, "C")
+          colnames(invalid_entry2) <- c("v1", "v2", "v3", "v4", "v5")
+          no_valid_synonym_list <- rbind(no_valid_synonym_list, invalid_entry2)
+          unidentified_synonymn_counter_1 <- unidentified_synonymn_counter_1 + 1
+          print(paste0(test.query, " PRESENT in invalid synonym table, but no valid alternative"))
+        }
+      #}
+    }else{
+      unidentified_synonymn_counter_2 <- unidentified_synonymn_counter_2 + 1
+      print(paste0(test.query, " ABSENT from invalid synonym table"))
+      unacc_syn_row <- 0
+      absent_entry <- cbind(test.query, i, "NA", unacc_syn_row, "D")
+      colnames(absent_entry) <- c("v1", "v2", "v3", "v4", "v5")
+      no_valid_synonym_list <- rbind(no_valid_synonym_list, absent_entry)
+    }
+  }else{
+    no_valid_synonym_list <- no_valid_synonym_list
+  }
+}
+
+host_trait_df$hHostNameFinal[host_trait_df$hHostNameFinal == "Cervus_timorensis"] <- "Rusa_timorensis"
+other_entry <- cbind("Cervus_timorensis", "NA", "Rusa_timorensis", "NA", "Absent")
+colnames(other_entry) <- c("v1", "v2", "v3", "v4", "v5")
+name_changes <- rbind(name_changes, other_entry)
+
+colnames(no_valid_synonym_list) <- c("from", "Host trait table row number", "to", "Phylacine valid synonym table\nrow number", "Flag")
+colnames(name_changes) <- c("from", "Host trait table row number", "to", "Phylacine valid/invalid synonym table\nrow number", "validity")
+
+#zzz <- 18
+#print(host_trait_df[no_valid_synonym_list[zzz,2],])
+#Phylacine_syn_unacc_sp[Phylacine_syn_unacc_sp$Binomial.1.2 == no_valid_synonym_list[zzz,3],]
+
+print(paste0(valid_syn_counter, " Olival/Albery et al species names were adjusted to DIFFERENT Phylacine species names using the Phylacine VALID synonymn list"))
+print(paste0(invalid_syn_counter, " Olival/Albery et al species names were adjusted to DIFFERENT Phylacine species names using the Phylacine INVALID synonymn list"))
+print(paste0(unidentified_synonymn_counter_1, " Olival/Albery names were PRESENT in the Phylacine INVALID synonym list, but no alternative provided"))
+print(paste0(unidentified_synonymn_counter_2, " Olival/Albery names were ABSENT from the Phylacine INVALID synonym list"))
+
+#no_valid_synonym_list2 <- as.array(no_valid_synonym_list$`Host trait table row number`)
+#no_valid_synonym_list2 <- as.numeric(no_valid_synonym_list2)
+
+# Remove the rows of the Olival/Albery host df that did not have a synonym in the synonym table valid species only
+#host_trait_df2 <- host_trait_df[-c(no_valid_synonym_list2),] 
+
+### TO DO: CALCULATE THE METRICS ASSOCIATED WITH PAST EXTINCTIONS????? (OR HAS THIS ALREADY BEEN DONE IN THE FOLLOWING SCRIPT)
+### TO DO: SAVE THE UPDATED Olival/Albery et al database
+#saveRDS(host_trait_df2, paste0(base_dir,"albery_hosts_CLOVER_Farrell_Plourde_nameEdit.rds"))
+write.csv(host_trait_df, paste0(base_dir,"intermediates/olival_hosts_CLOVER_Farrell_Plourde_nameEdit.csv"), row.names = F)
+write.csv(name_changes, paste0(base_dir, "intermediates/name_changes.rds"), row.names = F)
+
+```
+
+
+# 7)
+
+```{r}
+hosts <- read.csv(paste0(base_dir, "intermediates/olival_hosts_CLOVER_Farrell_Plourde_nameEdit.csv"))
+hosts$CR <- 0
+hosts$CR_prop <- NA
+hosts$EN <- 0
+hosts$EN_prop <- NA
+hosts$VU <- 0
+hosts$VU_prop <- NA
+hosts$total_threat <- 0
+hosts$total_threat_prop <- NA
+#hosts$S_phylacine <- 0
+
+#### Go through each host
+#### Find that in the extant_current_df
+#### Identify all species that overlap with these rows and columns
+#### Count the number of 
+pb = txtProgressBar(min = 0, max = nrow(hosts), initial = 0, style = 3) 
+
+
+for(i in 1:nrow(hosts)){
+  #i <- 1
+  focal_host_name <- hosts$hHostNameFinal_Phylacine[i]
+  #print(paste0(i, ": ", focal_host_name))
+  setTxtProgressBar(pb,i)
+  focal_host_subset <- extant_current_df %>%
+    filter(extant_current_df$species == focal_host_name)
+  focal_rows <- unique(focal_host_subset$row)
+  focal_cols <- unique(focal_host_subset$col)
+  overlap_df <- extant_current_df %>%
+    filter(species != focal_host_name) %>%
+    filter(row %in% focal_rows) %>%
+    filter(col %in% focal_cols)
+  overlapping_sp <- unique(overlap_df$species)
+  overlapping_phylacine <- Phylacine_trait %>%
+    filter(Binomial.1.2 %in% overlapping_sp)
+  n_CR <- nrow(overlapping_phylacine %>% filter(overlapping_phylacine$IUCN.Status.1.2 == "CR"))
+  n_EN <- nrow(overlapping_phylacine %>% filter(overlapping_phylacine$IUCN.Status.1.2 == "EN"))
+  n_VU <- nrow(overlapping_phylacine %>% filter(overlapping_phylacine$IUCN.Status.1.2 == "VU"))
+  n_NT <- nrow(overlapping_phylacine %>% filter(overlapping_phylacine$IUCN.Status.1.2 == "NT"))
+  #print(paste0("Critically endangered: ", n_CR, 
+  #             "; Endangered: ", n_EN,
+  #             "; Vulnerable: ", n_VU,
+  #             "; Near threatened: ", n_NT))
+  total_threatened <- sum(n_CR + n_EN + n_VU)
+  total_sym <- nrow(overlapping_phylacine)
+  
+  hosts$CR[hosts$hHostNameFinal == focal_host_name] <- n_CR
+  hosts$CR_prop[hosts$hHostNameFinal == focal_host_name] <- n_CR/total_sym
+  hosts$EN[hosts$hHostNameFinal == focal_host_name] <- n_EN
+  hosts$EN_prop[hosts$hHostNameFinal == focal_host_name] <- n_EN/total_sym
+  hosts$VU[hosts$hHostNameFinal == focal_host_name] <- n_VU
+  hosts$VU_prop[hosts$hHostNameFinal == focal_host_name] <- n_VU/total_sym
+  hosts$total_threat[hosts$hHostNameFinal == focal_host_name] <- total_threatened
+  hosts$total_threat_prop[hosts$hHostNameFinal == focal_host_name] <- total_threatened/total_sym
+
+}
+
+
+write.csv(hosts, paste0(base_dir, "intermediates/olival_hosts_CLOVER_Farrell_Plourde_nameEdit2.csv"), row.names = F)
+
+```
+
+
+# 8)
+
+```{r}
+combined_current_df <- as.data.frame(extant_df)
+hosts <- read.csv(paste0(base_dir, "intermediates/olival_hosts_CLOVER_Farrell_Plourde_nameEdit2.csv"))
+hosts$Sympat_n_Phylacine <- NA
+hosts$Sympat_min_PhyloDist <- NA
+hosts$Sympat_mean_PhyloDist <- NA
+hosts$Sympat_median_PhyloDist <- NA
+
+pb = txtProgressBar(min = 0, max = nrow(hosts), initial = 0, style = 3)
+
+for(i in 1:nrow(hosts)){
+  #i <- 2
+  focal_host_name <- hosts$hHostNameFinal_Phylacine[i]
+  #print(paste0(i, ": ", focal_host_name))
+  setTxtProgressBar(pb,i)
+  focal_host_subset <- combined_current_df %>%
+    filter(combined_current_df$species == focal_host_name)
+  focal_rows <- unique(focal_host_subset$row)
+  focal_cols <- unique(focal_host_subset$col)
+  overlap_df <- combined_current_df %>%
+    filter(species != focal_host_name) %>%
+    filter(row %in% focal_rows) %>%
+    filter(col %in% focal_cols)
+  overlapping_sp <- unique(overlap_df$species)
+  n_sympat <- length(overlapping_sp)
+  if(n_sympat > 0){
+    phylo_distances <- as.data.frame(distance_matrix[focal_host_name, overlapping_sp])
+    colnames(phylo_distances) <- "PhyloDist"
+    phylo_distances$PhyloDist <- as.numeric(phylo_distances$PhyloDist)
+    hosts$Sympat_n_Phylacine[i] <- n_sympat
+    hosts$Sympat_min_PhyloDist[i] <- min(phylo_distances$PhyloDist)
+    hosts$Sympat_mean_PhyloDist[i] <- mean(phylo_distances$PhyloDist)
+    hosts$Sympat_median_PhyloDist[i] <- median(phylo_distances$PhyloDist)
+  }else{
+    hosts$Sympat_min_PhyloDist[i] <- NA
+    hosts$Sympat_mean_PhyloDist[i] <- NA
+    hosts$Sympat_median_PhyloDist[i] <- NA
+    hosts$Sympat_n_Phylacine[i] <- 0
+  }
+}
+
+write.csv(hosts, paste0(base_dir, "intermediates/olival_hosts_CLOVER_Farrell_Plourde_nameEdit3.csv"), row.names = F)
+```
+
+# 9)
+```{r}
+hosts <- as.data.frame(read.csv(paste0(base_dir, "intermediates/olival_hosts_CLOVER_Farrell_Plourde_nameEdit3.csv")))
+species_table <- read.csv(paste0(base_dir,"intermediates/Extinct_sympatric_metrics.csv"))
+hosts$extinct.host.no <- NA
+hosts$extinct.host.no[which(hosts$hHostNameFinal_Phylacine %in% species_table$Extant_species...1.)] <-
+  species_table$sympatric_extinct_no[species_table$Extant_species...1. %in% hosts$hHostNameFinal_Phylacine]
+
+hosts$Phylacine_extinct_over_extantnatural <- hosts$extinct.host.no / (hosts$extinct.host.no + hosts$Sympat_n_Phylacine)
+
+write.csv(hosts, paste0(base_dir, "intermediates/olival_hosts_CLOVER_Farrell_Plourde_nameEdit4.csv"), row.names = F)
+```
+
+
+# 10) 
+```{r}
+hosts <- read.csv(paste0(base_dir, "intermediates/olival_hosts_CLOVER_Farrell_Plourde_nameEdit4.csv"))
+extant_current_df <- readRDS(paste0(base_dir,'intermediates/extant_current_df.rda'))
+pb = txtProgressBar(min = 0, max = nrow(hosts), initial = 0, style = 3)
+hosts$extant_sym_decrease <- 0
+hosts$extant_sym_increase <- 0
+
+for(i in 1:nrow(hosts)){
+  #i <- 694
+  
+  focal_host_name <- hosts$hHostNameFinal_Phylacine[i]
+  #print(paste0(focal_host_name, ": ", i, " of ", nrow(hosts)))
+  setTxtProgressBar(pb,i)
+  
+  focal_host_subset <- extant_df %>%
+    filter(extant_df$species == focal_host_name)
+  focal_rows <- unique(focal_host_subset$row)
+  focal_cols <- unique(focal_host_subset$col)
+  overlap_natural_df <- extant_df %>%
+    filter(species != focal_host_name) %>%
+    filter(row %in% focal_rows) %>%
+    filter(col %in% focal_cols)
+  
+  overlap_current_df <- extant_current_df %>%
+    filter(species != focal_host_name) %>%
+    filter(row %in% focal_rows) %>%
+    filter(col %in% focal_cols)
+  
+  focal_diff1 <- NULL
+  focal_diff2 <- NULL
+  focal_diff3 <- NULL
+  
+  focal_diff1 <- suppressMessages(anti_join(overlap_natural_df, overlap_current_df))
+  focal_diff2 <- suppressMessages(anti_join(overlap_current_df, overlap_natural_df))
+  focal_diff3 <- rbind(focal_diff1, focal_diff2)
+  #test <- length(unique(overlap_natural_df$species))
+  natural_biggerthan_current <- length(unique(focal_diff1$species))
+  current_biggerthan_natural <- length(unique(focal_diff2$species))
+  #print(paste0(test, " ", natural_biggerthan_current))
+  hosts$extant_sym_decrease[i] <- natural_biggerthan_current
+  hosts$extant_sym_increase[i] <- current_biggerthan_natural
+  
+}
+
+
+write.csv(hosts, paste0(base_dir, "intermediates/olival_hosts_CLOVER_Farrell_Plourde_nameEdit4.csv"), row.names = F)
+```
+
