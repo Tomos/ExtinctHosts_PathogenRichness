@@ -12,12 +12,13 @@ The supplementary files needed for the running of the R/R markdown scripts can b
 
 
 
-Key figures:
+Figure 1:
 
 ![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/global_local_extinction.png)
 
-<p align="left">
-  <img src="https://github.com/Tomos/ExHosts_PathRichness/Figures/global_local_extinction.png?raw=true" alt="Figure X"/>
-</p>
+Description
 
-![Model](https://github.com/Tomos/ExHosts_PathRichness/Figures/global_local_extinction.png)
+Figure 2: 
+![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/ShawGMPD2_GAMs-total-richness-bact-virus-helminth.png)
+
+Description
