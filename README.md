@@ -17,4 +17,4 @@ Key figures:
 <p align="left">
   <img src="https://github.com/Tomos/ExHosts_PathRichness/Figures/global_local_extinction.png?raw=true" alt="Figure X"/>
 </p>
-![ezcv logo](https://raw.githubusercontent.com/Descent098/ezcv/master/.github/logo.png)
+
