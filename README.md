@@ -8,26 +8,25 @@ by Tomos O. Prys-Jones<sup>1</sup>, Andrew J. Abraham<sup>1</sup>, Joseph Mihalj
 
 <sup>2</sup> School of Public Health, Imperial College London, South Kensington Campus, London, UK.
 
-The supplementary files needed for the running of the R/R markdown scripts can be found at: 
+The supplementary files needed for the successful running of the R/R markdown scripts (inc. previously published datasets) can be found at Zenodo (reserved DOI: 10.5281/zenodo.7521506).
+
+Key figures:
 
 
-
-**Figure 1:**
 
 ![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/global_local_extinction.png)
 
-Description
+**Figure 1**:
 
 
 
 
 
-**Figure 2:**
+
 
 ![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/ShawGMPD2_GAMs-total-richness-bact-virus-helminth.png)
 
-Description
-
+**Figure 2:**:
 
 
 
