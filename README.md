@@ -12,13 +12,13 @@ The supplementary files needed for the successful running of the R/R markdown sc
 
 Key figures:
 
--
+----
 
 ![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/global_local_extinction.png)
 
 **Figure 1**: Maps generated from the Phylacine repository (version 1.2.1) showing the geographic richness of extinct mammal species (a) and the number of extant mammal species that are estimated to have been lost per pixel (local extinctions) due to anthropogenic influences (b), recorded since 130,000 ybp. Map (a) highlights hotspots of extinction in North and South America with no recorded mammal extinctions from central western Africa.
 
---
+---
 
 ![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/ShawGMPD2_GAMs-total-richness-bact-virus-helminth.png)
 
