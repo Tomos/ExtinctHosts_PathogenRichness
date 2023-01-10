@@ -14,6 +14,8 @@ The supplementary files needed for the running of the R/R markdown scripts can b
 
 Key figures:
 
+![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/global_local_extinction.png)
+
 <p align="left">
   <img src="https://github.com/Tomos/ExHosts_PathRichness/Figures/global_local_extinction.png?raw=true" alt="Figure X"/>
 </p>
