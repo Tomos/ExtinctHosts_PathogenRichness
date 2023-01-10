@@ -32,3 +32,8 @@ Key figures:
 
 ---
 
+![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/predicted_max_combined.png)
+
+**Figure 4**: Maps showing the change in geographic patterns of virus (a), bacteria (b) and helminth (c) richness due to historical mammal extinctions. Each of viral, bacterial and helminth richness was calculated for host species using two GAM models (both assuming maximum research effort). One class of models included variables related to historical mammal losses and the other class did not. The results from both models were visualized using IUCN range maps (2015.2), and the map generated without extinction variables was subtracted from the map that did, resulting in maps a – c. 
+
+---
