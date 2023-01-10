@@ -12,7 +12,7 @@ The supplementary files needed for the running of the R/R markdown scripts can b
 
 
 
-**Figure 1:
+**Figure 1:**
 
 ![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/global_local_extinction.png)
 
@@ -22,7 +22,8 @@ Description
 
 
 
-**Figure 2: 
+**Figure 2:**
+
 ![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/ShawGMPD2_GAMs-total-richness-bact-virus-helminth.png)
 
 Description
