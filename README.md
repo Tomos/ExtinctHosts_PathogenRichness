@@ -14,7 +14,7 @@ Key figures:
 
 ----
 
-[PDF](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/figure_process12.pdf)
+![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/figure_process13.png)
 
 **Figure 1**: Schematic showing the generation of the extinction variables. All Phylacine range maps (left-hand side) represent extinct and extant species distributions under the assumption of no anthropogenic influence. Range maps were subdivided into the extant hosts (a), of which a subset was included in the Olival et al. (2017) study (b), as well as extinct species (c). Each of the host species from Olival et al. (2017) (b1) were compared to all other extant species (a1 – 4), to identify the number of extant sympatric species assuming no anthropogenic influence. For each sympatric species, the range map without anthropogenic pressure was compared to the corresponding map with anthropogenic pressure, to identify the number of local extinctions of extant species (represented by d1). The focal range map (b1) was also compared to all extinct ranges (c1 – 4), to identify all those that overlapped (c2 & c3). The Phylacine phylogeny was then used to determine the minimum, mean and median phylogenetic distances between the focal extant species (b1) and sympatric extinct species (c2 & c3). From all those that overlapped, the number of extinct species in the same family as the focal extant species were also determined. Animal silhouettes from PhyloPic.
 
