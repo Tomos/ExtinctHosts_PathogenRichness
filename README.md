@@ -18,3 +18,4 @@ Key figures:
   <img src="https://github.com/Tomos/ExHosts_PathRichness/Figures/global_local_extinction.png?raw=true" alt="Figure X"/>
 </p>
 
+![Model]("https://github.com/Tomos/ExHosts_PathRichness/Figures/global_local_extinction.png")
