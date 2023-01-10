@@ -10,6 +10,6 @@ by Tomos O. Prys-Jones<sup>1</sup>, Andrew J. Abraham<sup>1</sup>, Joseph Mihalj
 
 Key figures:
 
-<p align="center">
+<p align="left">
   <img src="https://github.com/Tomos/ExHosts_PathRichness/Figures/sublime_text.png?raw=true" alt="Figure X"/>
 </p>
