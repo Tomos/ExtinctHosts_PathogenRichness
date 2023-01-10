@@ -11,5 +11,5 @@ by Tomos O. Prys-Jones<sup>1</sup>, Andrew J. Abraham<sup>1</sup>, Joseph Mihalj
 Key figures:
 
 <p align="left">
-  <img src="https://github.com/Tomos/ExHosts_PathRichness/Figures/sublime_text.png?raw=true" alt="Figure X"/>
+  <img src="https://github.com/Tomos/ExHosts_PathRichness/Figures/global_local_extinction.png?raw=true" alt="Figure X"/>
 </p>
