@@ -13,6 +13,11 @@ The supplementary files needed for the successful running of the R/R markdown sc
 Key figures:
 
 ----
+<object data="https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/figure_process12.pdf" type="application/pdf" width="700px" height="700px">
+    <embed src="https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/figure_process12.pdf">
+        <p>This browser does not support PDFs. Please download the PDF to view it: <a href="http://yoursite.com/the.pdf">Download PDF</a>.</p>
+    </embed>
+</object>
 
 ![alt text](https://github.com/Tomos/ExtinctHosts_PathogenRichness/blob/master/Figures/figure_process12.pdf)
 
